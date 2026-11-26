@@ -65,3 +65,10 @@ Keep commits focused; include tests for behavior changes.
 
 By contributing you agree that your contribution is licensed under
 MIT OR Apache-2.0, matching the project.
+
+## Releases
+
+Tags matching `v*` (for example `v0.1.1`) trigger
+[`.github/workflows/release.yml`](.github/workflows/release.yml). It builds the
+UI, cross-compiles static x86_64/aarch64/armv7 musl binaries, and publishes
+OpenWrt `.ipk` and `openwrt-*.tar.gz` assets with checksums.

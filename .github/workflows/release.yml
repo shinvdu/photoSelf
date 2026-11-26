@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+          retention-days: 1
+
+  build:
+    needs: ui
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            asset: x86_64
+            ipk_arch: x86_64
+          - target: aarch64-unknown-linux-musl
+            asset: aarch64
+            ipk_arch: aarch64_cortex-a53
+          - target: armv7-unknown-linux-musleabihf
+            asset: armv7
+            ipk_arch: arm_cortex-a7_neon-vfpv4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Download UI
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+
+      - name: Install Zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.14.1" >> "$GITHUB_PATH"
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cargo zigbuild --release --target "${{ matrix.target }}" \
+            -p photoself-server --features embed-ui
+          mkdir -p release
+          BIN="target/${{ matrix.target }}/release/photoself"
+          file "$BIN"
+          tar -czf "release/photoself-${VERSION}-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" photoself
+          scripts/make-ipk.sh "$BIN" "${{ matrix.ipk_arch }}" "${VERSION}-1" release
+
+          ROOT="$RUNNER_TEMP/openwrt-root"
+          install -Dm755 "$BIN" "$ROOT/usr/bin/photoself"
+          install -Dm755 deploy/openwrt/photoself.init "$ROOT/etc/init.d/photoself"
+          install -Dm600 deploy/openwrt/config.release.toml "$ROOT/etc/photoself/config.toml"
+          tar -czf "release/photoself-${VERSION}-openwrt-${{ matrix.asset }}.tar.gz" \
+            -C "$ROOT" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.asset }}
+          path: release/*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: asset-*
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release
+        run: sha256sum *.tar.gz *.ipk > SHA256SUMS
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
