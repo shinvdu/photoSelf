@@ -19,6 +19,16 @@ The design document (Chinese) lives at [`docs/design.md`](docs/design.md).
 
 ---
 
+## Documentation
+
+- [Installation](docs/installation.md) · [安装文档](docs/installation.zh-CN.md)
+- [Usage](docs/usage.md) · [使用说明](docs/usage.zh-CN.md)
+- [AI installation prompt](docs/ai-install-prompt.md) · [AI 安装提示词](docs/ai-install-prompt.zh-CN.md)
+- [All docs](docs/README.md)
+- [Technical design](docs/design.md)（中文）
+- [OpenWrt notes](deploy/openwrt/README.md)
+- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
 ## Why another gallery?
 
 Most self-hosted galleries assume a powerful server and want to import your library. photoSelf is aimed at a different point:
@@ -64,7 +74,7 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 
 ## Quick start
 
-Requirements: Rust 1.75+ (edition 2021), Node 20+, `ffmpeg`/`ffprobe` for video posters.
+Requirements: Rust stable (tested with 1.97), Node 20+, `ffmpeg`/`ffprobe` for video posters.
 
 ```bash
 # 1. Build the UI
@@ -100,6 +110,24 @@ cargo build -p photoself-server --release --features embed-ui
 ```
 
 ---
+
+## Install with an AI agent
+
+Copy this into Claude Code, Cursor, or another coding agent:
+
+```text
+Install photoSelf from https://github.com/shinvdu/photoSelf.
+Read docs/installation.md and docs/usage.md first.
+
+Ask me for: install target (source/Docker/OpenWrt), photo library path(s),
+writable data directory, port/proxy, auth mode, and whether HEIC/HEVC sidecars
+are needed. Keep the photo library read-only; never move or delete photos.
+
+Build and start the service, run a scan, verify /healthz and one thumbnail,
+then report the URL, service name, data directory, library IDs and scan results.
+```
+
+Full prompt and safety rules: [`docs/ai-install-prompt.md`](docs/ai-install-prompt.md).
 
 ## Configuration
 

@@ -19,6 +19,16 @@
 
 ---
 
+## 文档
+
+- [安装文档](docs/installation.zh-CN.md) · [English](docs/installation.md)
+- [使用说明](docs/usage.zh-CN.md) · [English](docs/usage.md)
+- [AI 安装提示词](docs/ai-install-prompt.zh-CN.md) · [English](docs/ai-install-prompt.md)
+- [全部文档](docs/README.md)
+- [技术设计](docs/design.md)
+- [OpenWrt 说明](deploy/openwrt/README.md)
+- [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md)
+
 ## 为什么还要另一个画廊？
 
 大多数自托管画廊假设你有性能充足的服务器，并且要求把照片导入它们的库。photoSelf 的定位不同：
@@ -64,7 +74,7 @@
 
 ## 快速开始
 
-需要：Rust 1.75+（edition 2021）、Node 20+，视频海报需要 `ffmpeg`/`ffprobe`。
+需要：Rust stable（本项目在 1.97 上测试）、Node 20+，视频海报需要 `ffmpeg`/`ffprobe`。
 
 ```bash
 # 1. 构建前端
@@ -100,6 +110,24 @@ cargo build -p photoself-server --release --features embed-ui
 ```
 
 ---
+
+## 用 AI 安装
+
+把下面的提示词复制到 Claude Code、Cursor 或其他编码 Agent：
+
+```text
+从 https://github.com/shinvdu/photoSelf 安装 photoSelf。
+先阅读 docs/installation.zh-CN.md 和 docs/usage.zh-CN.md。
+
+先问我：安装方式（源码/Docker/OpenWrt）、照片库路径、可写数据目录、
+端口/反向代理、认证方式，以及是否需要 HEIC/HEVC sidecar。
+照片库必须保持只读，绝不能移动或删除照片。
+
+构建并启动服务，执行一次扫描，验证 /healthz 和一张缩略图，
+然后汇报 URL、服务名、数据目录、库 ID 和扫描结果。
+```
+
+完整提示词与安全规则：[`docs/ai-install-prompt.zh-CN.md`](docs/ai-install-prompt.zh-CN.md)。
 
 ## 配置
 
@@ -279,7 +307,7 @@ photoSelf/
 │   └── photoself-server/   # axum API、认证、静态 UI、CLI
 ├── ui/                     # Vue 3 + Vite SPA
 ├── deploy/                 # systemd、procd、nginx、lighttpd、Docker 配置
-├── docs/                   # 设计文档 + 截图
+├── docs/                   # 安装、使用、AI 提示词、设计文档、截图
 ├── scripts/
 │   └── make-sidecars.py    # 低功耗设备的 HEIC/HEVC 预览生成
 ├── config.example.toml
