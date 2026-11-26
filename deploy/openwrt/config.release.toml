@@ -1,0 +1,64 @@
+# Default configuration installed by the OpenWrt .ipk release.
+# EDIT THIS FILE before starting the service.
+#
+# The default is LAN-only without authentication. For anything reachable by
+# other people, set auth.mode = "basic" and add username/password_hash
+# (generate a hash with: photoself hash-password --password '...').
+
+[server]
+mode = "standalone"
+listen = "0.0.0.0:8787"
+ui_embedded = true
+
+[data]
+dir = "/mnt/data/photoself"
+
+[[libraries]]
+id = "photos"
+name = "Photos"
+path = "/mnt/photos"
+read_only = true
+enabled = true
+ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
+
+[media]
+serve_mode = "standalone"
+
+[thumbnails]
+sizes = [320, 1280]
+format = "jpeg"
+quality = 82
+concurrency = 1
+max_pixels = 50000000
+
+[ffmpeg]
+enabled = true
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+concurrency = 1
+timeout_seconds = 120
+
+[video]
+poster_enabled = true
+transcode_enabled = false
+max_height = 1080
+
+[auth]
+mode = "none"
+
+[scan]
+on_start = false
+interval = "0"
+concurrency = 1
+follow_symlinks = false
+missing_retention_days = 30
+hash = true
+probe_videos = true
+
+[trash]
+enabled = false
+retention_days = 30
+
+[logging]
+level = "info"
+format = "text"

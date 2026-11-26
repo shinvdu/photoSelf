@@ -4,7 +4,36 @@
 
 photoSelf 以单个 Rust 二进制运行，前端可选内嵌。它直接读取现有目录，不会导入或搬动照片。
 
-> 目前还没有官方预编译发布包。请从源码构建、使用 Docker，或为你的设备交叉编译。
+> 预编译 Linux 二进制（x86_64、aarch64、armv7）和 OpenWrt `.ipk`
+> 安装包发布在 [Releases](https://github.com/shinvdu/photoSelf/releases)。
+> 其他架构请从源码构建。
+
+### 预编译发布包
+
+| 文件 | 用途 |
+|---|---|
+| `photoself-<version>-x86_64-unknown-linux-musl.tar.gz` | 静态 Linux x86_64 二进制 |
+| `photoself-<version>-aarch64-unknown-linux-musl.tar.gz` | ARM64 / aarch64 Linux |
+| `photoself-<version>-armv7-unknown-linux-musleabihf.tar.gz` | ARMv7 硬浮点 |
+| `photoself_<version>_aarch64_cortex-a53.ipk` | OpenWrt 23.05/24.10 opkg，常见 ARM64 目标 |
+| `photoself_<version>_arm_cortex-a7_neon-vfpv4.ipk` | OpenWrt 23.05/24.10 opkg，常见 ARMv7 目标 |
+| `photoself_<version>_x86_64.ipk` | OpenWrt x86_64 |
+| `photoself-<version>-openwrt-aarch64.tar.gz` | apk 版 OpenWrt / 手工安装 |
+| `photoself-<version>-openwrt-armv7.tar.gz` | apk 版 OpenWrt / 手工安装 |
+
+`.ipk` 会安装 `/usr/bin/photoself`、`/etc/init.d/photoself` 和
+`/etc/photoself/config.toml`。**启动前先编辑配置**（路径是占位符；默认
+`auth.mode = "none"`，仅适合可信局域网）。
+
+```sh
+opkg install photoself_<version>_aarch64_cortex-a53.ipk
+vi /etc/photoself/config.toml
+/etc/init.d/photoself enable
+/etc/init.d/photoself start
+```
+
+apk 版 OpenWrt（25.12+）可把 `openwrt-*.tar.gz` 解压到 `/`（或从源码构建），
+同样先编辑配置。未列出的架构请使用原始二进制 tar.gz 或从源码构建。
 
 ## 环境要求
 

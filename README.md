@@ -4,6 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/shinvdu/photoSelf/actions/workflows/ci.yml/badge.svg)](https://github.com/shinvdu/photoSelf/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Release](https://img.shields.io/github/v/release/shinvdu/photoSelf?sort=semver)](https://github.com/shinvdu/photoSelf/releases)
 
 A lightweight, config-driven, self-hosted photo and video gallery.
 
@@ -101,6 +102,8 @@ photoself scan -c config.toml             # scan and exit
 photoself scan -c config.toml --library family
 photoself hash-password --password '...'  # Argon2id hash for auth.mode = "basic"
 ```
+
+Prebuilt Linux binaries (x86_64 / aarch64 / armv7) and OpenWrt `.ipk` packages are available under [Releases](https://github.com/shinvdu/photoSelf/releases).
 
 For a single-file release build with the UI embedded:
 

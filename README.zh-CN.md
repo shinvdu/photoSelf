@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/shinvdu/photoSelf/actions/workflows/ci.yml/badge.svg)](https://github.com/shinvdu/photoSelf/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
+[![Release](https://img.shields.io/github/v/release/shinvdu/photoSelf?sort=semver)](https://github.com/shinvdu/photoSelf/releases)
 
 一个轻量、配置驱动、自托管的照片与视频画廊。
 
@@ -101,6 +102,8 @@ photoself scan -c config.toml             # 扫描后退出
 photoself scan -c config.toml --library family
 photoself hash-password --password '...'  # 生成 Argon2id 哈希
 ```
+
+预编译二进制（x86_64 / aarch64 / armv7）和 OpenWrt `.ipk` 安装包见 [Releases](https://github.com/shinvdu/photoSelf/releases)。
 
 单文件发布（前端嵌入）：
 

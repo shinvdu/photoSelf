@@ -5,8 +5,37 @@
 photoSelf runs as a single Rust binary with an optional embedded Vue UI. It reads
 existing folders; it does not import or move your photos.
 
-> There are no official prebuilt release artifacts yet. Build from source,
-> Docker, or cross-compile for your device.
+> Prebuilt Linux binaries (x86_64, aarch64, armv7) and OpenWrt `.ipk`
+> packages are published under [Releases](https://github.com/shinvdu/photoSelf/releases).
+> Build from source for other architectures.
+
+### Prebuilt release assets
+
+| Asset | Use |
+|---|---|
+| `photoself-<version>-x86_64-unknown-linux-musl.tar.gz` | statically linked Linux x86_64 binary |
+| `photoself-<version>-aarch64-unknown-linux-musl.tar.gz` | ARM64 / aarch64 Linux |
+| `photoself-<version>-armv7-unknown-linux-musleabihf.tar.gz` | ARMv7 hard-float |
+| `photoself_<version>_aarch64_cortex-a53.ipk` | OpenWrt 23.05/24.10 opkg, common ARM64 targets |
+| `photoself_<version>_arm_cortex-a7_neon-vfpv4.ipk` | OpenWrt 23.05/24.10 opkg, common ARMv7 targets |
+| `photoself_<version>_x86_64.ipk` | OpenWrt x86_64 |
+| `photoself-<version>-openwrt-aarch64.tar.gz` | OpenWrt apk-based systems / manual install |
+| `photoself-<version>-openwrt-armv7.tar.gz` | OpenWrt apk-based systems / manual install |
+
+The `.ipk` installs `/usr/bin/photoself`, `/etc/init.d/photoself` and
+`/etc/photoself/config.toml`. **Edit the config before starting** (paths are
+placeholders; default auth is `none` for a trusted LAN).
+
+```sh
+opkg install photoself_<version>_aarch64_cortex-a53.ipk
+vi /etc/photoself/config.toml
+/etc/init.d/photoself enable
+/etc/init.d/photoself start
+```
+
+For apk-based OpenWrt (25.12+), extract the `openwrt-*.tar.gz` into `/` (or
+build from source) and edit the config the same way. For architectures not
+listed, use the raw binary tarball or build from source.
 
 ## Requirements
 
