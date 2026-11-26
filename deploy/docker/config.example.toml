@@ -1,0 +1,38 @@
+# Minimal Docker config: /photos is the read-only photo mount, /data is the
+# persistent volume. Copy to a path of your choice and mount at
+# /data/config.toml.
+
+[server]
+mode = "standalone"
+listen = "0.0.0.0:8787"
+
+[data]
+dir = "/data"
+
+[[libraries]]
+id = "photos"
+name = "Photos"
+path = "/photos"
+read_only = true
+
+[media]
+serve_mode = "standalone"
+
+[thumbnails]
+sizes = [320, 1280]
+concurrency = 1
+
+[ffmpeg]
+enabled = true
+concurrency = 1
+
+[video]
+transcode_enabled = false
+
+[auth]
+mode = "none"     # put a reverse proxy / VPN in front for remote access
+
+[scan]
+on_start = true
+hash = true
+probe_videos = true

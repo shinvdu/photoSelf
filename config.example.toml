@@ -1,0 +1,90 @@
+# photoSelf configuration example
+# Copy to config.toml and adjust. All fields shown here have defaults except
+# the libraries list, which must contain at least one enabled entry.
+
+[server]
+# `standalone` serves the SPA, API and media from this process.
+# `reverse-proxy` expects Nginx/lighttpd/Caddy to terminate TLS/auth and serve media.
+mode = "standalone"
+# Use 127.0.0.1:8787 behind a reverse proxy, 0.0.0.0:8787 on a trusted LAN.
+listen = "0.0.0.0:8787"
+# Directory containing index.html and assets (used when the embed-ui feature is off).
+ui_dir = "ui/dist"
+# Reserved; embedding is a compile-time feature (`--features embed-ui`).
+ui_embedded = false
+# Reserved: proxy-header trust list is documented but not enforced in v0.1.
+trusted_proxies = ["127.0.0.1/32", "::1/128"]
+
+[data]
+# SQLite, thumbnails, temporary files and trash. Keep this off slow/limited NAND.
+dir = "./data"
+
+# One or more libraries. Paths can be mounted read-only.
+[[libraries]]
+id = "photos"
+name = "Photos"
+path = "/photos"
+read_only = true
+enabled = true
+ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
+
+[media]
+# `standalone`: this server streams media and thumbnails.
+# `proxy`: a reverse proxy serves `/media` and `/thumbs` (recommended for low-power devices).
+serve_mode = "standalone"
+public_media_path = "/media"
+public_thumb_path = "/thumbs"
+
+[thumbnails]
+# Optional absolute path; defaults to <data.dir>/cache/thumbs.
+# dir = "/var/lib/photoself/cache/thumbs"
+# Optional root directory of pre-generated previews. Files live at
+# `<sidecar_dir>/<library-id>/<relative-path>.<size>.jpg` (plus `.meta.json`).
+# Useful for HEIC/HEVC media on devices whose ffmpeg lacks those decoders;
+# generate them with scripts/make-sidecars.py.
+# sidecar_dir = "/var/lib/photoself/sidecars"
+sizes = [320, 1280]
+format = "jpeg"          # jpeg or webp
+quality = 82
+concurrency = 2          # use 1 on 512 MB devices
+max_pixels = 100000000   # refuse to decode images larger than this
+prewarm_on_scan = false  # reserved for a future release
+
+[ffmpeg]
+enabled = true
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+concurrency = 1
+timeout_seconds = 120
+
+[video]
+poster_enabled = true
+transcode_enabled = false   # reserved for a future release
+max_height = 1080
+
+[auth]
+# none   = trusted LAN only
+# basic  = single user; set username + password_hash (photoself hash-password --password '...')
+# proxy  = trust X-Forwarded-User from a reverse proxy
+mode = "none"
+# username = "admin"
+# password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+session_ttl_hours = 720
+
+[scan]
+on_start = true
+interval = "0"             # reserved for a future release; "0" disables it
+concurrency = 2          # reserved; scanning is currently sequential
+follow_symlinks = false
+missing_retention_days = 30  # reserved; missing rows are kept
+hash = true                # BLAKE3 content hash; enables rename detection
+probe_videos = true        # ffprobe; set false if ffprobe is unavailable
+
+[trash]
+enabled = true             # reserved for the future delete/restore implementation
+retention_days = 30
+# dir = "./data/trash"
+
+[logging]
+level = "info"
+format = "text"            # text or json (json is reserved)

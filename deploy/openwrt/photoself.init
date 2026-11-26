@@ -1,0 +1,46 @@
+#!/bin/sh /etc/rc.common
+# photoSelf procd init script (OpenWrt)
+#
+# Recommended layout:
+#   /usr/bin/photoself              (static binary, ~10-20 MB)
+#   /etc/photoself/config.toml
+#   /mnt/.../photo-app/data         (SQLite + thumbnails on USB)
+#
+# If data lives on USB, wait for the mount before starting. START=99 starts
+# late; procd retries indefinitely (respawn ... 0) if the data dir is not
+# ready yet.
+
+USE_PROCD=1
+START=99
+STOP=10
+
+PROG=/usr/bin/photoself
+CONF=/etc/photoself/config.toml
+
+start_service() {
+	if [ ! -x "$PROG" ]; then
+		logger -t photoself "binary not found: $PROG"
+		return 1
+	fi
+	if [ ! -f "$CONF" ]; then
+		logger -t photoself "config not found: $CONF"
+		return 1
+	fi
+
+	procd_open_instance
+	procd_set_param command "$PROG" serve -c "$CONF"
+	# respawn threshold(sec) timeout(sec) retry-count; 0 = retry forever
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param limits nofile="8192" core="0"
+	procd_close_instance
+}
+
+reload_service() {
+	procd_send_signal photoself
+}
+
+service_triggers() {
+	procd_add_reload_trigger "photoself"
+}

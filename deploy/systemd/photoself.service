@@ -1,0 +1,25 @@
+[Unit]
+Description=photoSelf photo gallery
+Documentation=https://github.com/shinvdu/photoSelf
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=photoself
+Group=photoself
+ExecStart=/usr/local/bin/photoself serve -c /etc/photoself/config.toml
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/photos
+ReadWritePaths=/var/lib/photoself
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
