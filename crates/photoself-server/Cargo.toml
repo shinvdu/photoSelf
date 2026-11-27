@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 mime_guess = "2"
 argon2 = "0.5"
-password-hash = "0.5"
+password-hash = "0.6"
 percent-encoding = "2"
 base64.workspace = true
 rand_core = { version = "0.6", features = ["getrandom"] }
