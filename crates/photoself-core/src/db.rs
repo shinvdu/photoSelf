@@ -851,7 +851,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT a.id, a.name, a.description, a.cover_item_id, a.created_at,
-                    (SELECT COUNT(*) FROM album_items ai WHERE ai.album_id = a.id) AS item_count
+                    (SELECT COUNT(*) FROM album_items ai JOIN items i ON i.id = ai.item_id
+                     WHERE ai.album_id = a.id AND i.missing = 0) AS item_count
              FROM albums a ORDER BY a.created_at DESC",
         )?;
         let albums = stmt
@@ -865,7 +866,8 @@ impl Db {
         let album = conn
             .query_row(
                 "SELECT a.id, a.name, a.description, a.cover_item_id, a.created_at,
-                        (SELECT COUNT(*) FROM album_items ai WHERE ai.album_id = a.id) AS item_count
+                        (SELECT COUNT(*) FROM album_items ai JOIN items i ON i.id = ai.item_id
+                     WHERE ai.album_id = a.id AND i.missing = 0) AS item_count
                  FROM albums a WHERE a.id = ?1",
                 params![id],
                 row_to_album,
@@ -922,7 +924,8 @@ impl Db {
         // any other member must not shuffle the album's cover.
         conn.execute(
             "UPDATE albums SET cover_item_id = (
-                SELECT item_id FROM album_items WHERE album_id = ?1 LIMIT 1
+                SELECT ai.item_id FROM album_items ai JOIN items i ON i.id = ai.item_id
+                 WHERE ai.album_id = ?1 AND i.missing = 0 LIMIT 1
              ), updated_at = ?2 WHERE id = ?1 AND cover_item_id = ?3",
             params![album_id, now_str(), item_id],
         )?;
@@ -1129,6 +1132,26 @@ mod tests {
             db.get_derivative("a", "web").unwrap().as_deref(),
             Some("/tmp/a-web.mp4")
         );
+    }
+
+    #[test]
+    fn album_counts_ignore_missing_items() {
+        let db = Db::open_in_memory().unwrap();
+        db.seed_config_libraries(&[LibraryConfig {
+            id: "lib".into(),
+            name: "Library".into(),
+            path: "/tmp".into(),
+            ..Default::default()
+        }])
+        .unwrap();
+        db.upsert_item(&sample_item("a", "a.jpg")).unwrap();
+        db.upsert_item(&sample_item("b", "b.jpg")).unwrap();
+        let album = db.create_album("Album", None).unwrap();
+        db.add_album_item(&album.id, "a").unwrap();
+        db.add_album_item(&album.id, "b").unwrap();
+        db.set_missing("a", true).unwrap();
+        assert_eq!(db.list_albums().unwrap()[0].item_count, 1);
+        assert_eq!(db.get_album(&album.id).unwrap().unwrap().item_count, 1);
     }
 
     #[test]

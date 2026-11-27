@@ -37,10 +37,16 @@ export default {
     trash: '回收站是空的。',
   },
   album: {
+    hint: '把照片整理进相册；相册只保存关系，不会移动原文件。',
+    createTitle: '新建相册',
+    nameLabel: '相册名称',
+    created: '已创建相册「{name}」',
     createPlaceholder: '新相册名称…',
     create: '创建相册',
     deleteTitle: '删除相册',
     deleteConfirm: '删除相册「{name}」？照片仍保留在媒体库中。',
+    deleteConfirmAgain:
+      '再次确认：删除相册「{name}」？此操作不可撤销，相册内 {count} 张照片不会被删除。',
     items: '{count} 个项目',
     back: '← 相册',
     removeSelected: '从相册中移除选中项',
@@ -96,7 +102,9 @@ export default {
   },
   upload: {
     done: '已上传 {count} 个文件',
+    doneToAlbum: '已上传并加入相册「{name}」：{count} 个文件',
     failed: '{failed} 个文件上传失败：{message}',
+    albumFailed: '已上传，但有 {failed} 个文件未能加入相册：{message}',
   },
   batch: {
     select: '选择',

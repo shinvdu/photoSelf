@@ -37,10 +37,16 @@ export default {
     trash: 'Trash is empty.',
   },
   album: {
+    hint: 'Group photos into albums; albums only store relationships and never move files.',
+    createTitle: 'New album',
+    nameLabel: 'Album name',
+    created: 'Created album "{name}"',
     createPlaceholder: 'New album name…',
     create: 'Create album',
     deleteTitle: 'Delete album',
     deleteConfirm: 'Delete album "{name}"? The photos stay in the library.',
+    deleteConfirmAgain:
+      'Confirm again: delete album "{name}"? This cannot be undone; the {count} photos inside are not deleted.',
     items: '{count} item | {count} items',
     back: '← Albums',
     removeSelected: 'Remove selected from album',
@@ -96,7 +102,9 @@ export default {
   },
   upload: {
     done: 'Uploaded {count} file(s)',
+    doneToAlbum: 'Uploaded and added to "{name}": {count} file(s)',
     failed: '{failed} file(s) failed to upload: {message}',
+    albumFailed: 'Uploaded, but {failed} file(s) could not be added to the album: {message}',
   },
   batch: {
     select: 'Select',

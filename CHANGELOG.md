@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.2 — 2026-11-27
+
+- Albums: **New album** is now a button that opens a modal instead of an
+  always-visible inline name field.
+- Album delete button is hidden by default and fades in on hover (always
+  visible on touch devices); the hidden button no longer captures clicks.
+- Deleting an album now requires a **second confirmation**; the second prompt
+  makes clear that it cannot be undone and that the photos are not deleted.
+- Uploading while inside an album automatically adds the uploaded photos to
+  that album, with a toast.
+- The global item count is only shown on the timeline; album/trash/library
+  views no longer display it. Transient upload text clears when done or when
+  switching views.
+- Fix: the landscape lightbox close button was covered by the full-bleed
+  viewer and could not be clicked.
+- Fix: album item counts and cover selection now ignore missing/deleted items.
+- The version number moved from the top bar to the page footer.
+
 ## 0.7.1 — 2026-11-27
 
 - Uploading files now shows a toast on completion ("Uploaded N files") and a

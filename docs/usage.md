@@ -276,8 +276,10 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 - **Tags:** open an item, type/select a tag in the lightbox, then use the tag
   filter in the header. `POST /api/v1/tags` creates tags; attach with
   `POST /api/v1/items/{id}/tags`.
-- **Albums:** switch to **Albums**, create one, then add the current item from
-  the lightbox. Album membership is virtual; no files are moved.
+- **Albums:** switch to **Albums**, press **New album** (a modal asks for the
+  name), then add the current item from the lightbox. Uploading while inside an
+  album adds the new photos to that album automatically. Album membership is
+  virtual; no files are moved.
 - **Upload:** with `[write] enabled = true` and a writable library, press
   **Upload** and select image/video files. The server writes a temporary file
   and indexes it immediately.

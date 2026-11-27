@@ -59,6 +59,8 @@ const transcodeStatus = ref('')
 const videoError = ref(false)
 const fileInput = ref(null)
 const newAlbumName = ref('')
+const showAlbumDialog = ref(false)
+const albumError = ref('')
 
 const libraryList = ref([])
 const libraryLoading = ref(false)
@@ -362,6 +364,7 @@ function search() {
 
 function switchView(next) {
   clearSelection()
+  uploadMessage.value = ''
   view.value = next
   selected.value = null
   activeAlbum.value = null
@@ -962,6 +965,8 @@ async function uploadFiles(files) {
   }
   uploading.value = true
   error.value = ''
+  const targetAlbum = view.value === 'album' ? activeAlbum.value : null
+  const uploadedIds = []
   let done = 0
   let failed = 0
   let lastError = ''
@@ -970,7 +975,8 @@ async function uploadFiles(files) {
     form.append('library', library)
     form.append('file', file, file.name)
     try {
-      await api(`${API}/upload`, { method: 'POST', body: form })
+      const item = await api(`${API}/upload`, { method: 'POST', body: form })
+      uploadedIds.push(item.id)
       done += 1
       uploadMessage.value = t('status.uploaded', {
         done,
@@ -986,15 +992,47 @@ async function uploadFiles(files) {
       error.value = lastError
     }
   }
+
+  // Uploading while inside an album adds the new photos to that album.
+  let albumAdded = 0
+  let albumFailed = 0
+  let albumError = ''
+  if (targetAlbum && uploadedIds.length) {
+    for (const id of uploadedIds) {
+      try {
+        await api(`${API}/albums/${targetAlbum.id}/items`, {
+          method: 'POST',
+          body: JSON.stringify({ item_id: id }),
+        })
+        albumAdded += 1
+      } catch (err) {
+        albumFailed += 1
+        albumError = err.message
+      }
+    }
+  }
+
   uploading.value = false
   await loadInfo()
   if (view.value === 'timeline') await loadItems(true)
-  if (view.value === 'album') await loadAlbumItems()
+  if (view.value === 'album') {
+    await Promise.all([loadAlbums(), loadAlbumItems()])
+  }
   if (failed) {
     showToast(t('upload.failed', { failed, message: lastError }), true)
+  } else if (albumFailed) {
+    showToast(
+      t('upload.albumFailed', { failed: albumFailed, message: albumError }),
+      true,
+    )
+  } else if (done && targetAlbum && albumAdded) {
+    showToast(
+      t('upload.doneToAlbum', { count: albumAdded, name: targetAlbum.name }),
+    )
   } else if (done) {
     showToast(t('upload.done', { count: done }))
   }
+  uploadMessage.value = ''
 }
 
 async function createTag() {
@@ -1055,22 +1093,46 @@ async function createAndAttachTag() {
   }
 }
 
+function openAlbumDialog() {
+  newAlbumName.value = ''
+  albumError.value = ''
+  showAlbumDialog.value = true
+}
+
+function closeAlbumDialog() {
+  showAlbumDialog.value = false
+}
+
 async function createAlbum() {
-  if (!newAlbumName.value.trim()) return
+  const name = newAlbumName.value.trim()
+  if (!name) return
+  albumError.value = ''
   try {
     await api(`${API}/albums`, {
       method: 'POST',
-      body: JSON.stringify({ name: newAlbumName.value.trim() }),
+      body: JSON.stringify({ name }),
     })
     newAlbumName.value = ''
+    showAlbumDialog.value = false
     await loadAlbums()
+    showToast(t('album.created', { name }))
   } catch (err) {
-    error.value = err.message
+    albumError.value = err.message
   }
 }
 
 async function deleteAlbum(album) {
   if (!confirm(t('album.deleteConfirm', { name: album.name }))) return
+  if (
+    !confirm(
+      t('album.deleteConfirmAgain', {
+        name: album.name,
+        count: album.item_count,
+      }),
+    )
+  ) {
+    return
+  }
   try {
     await api(`${API}/albums/${album.id}`, { method: 'DELETE' })
     if (activeAlbum.value?.id === album.id) backToAlbums()
@@ -1309,7 +1371,6 @@ onUnmounted(() => {
     <div class="brand">
       <span class="logo">❀</span>
       <span>photoSelf</span>
-      <small v-if="info">{{ info.version }}</small>
     </div>
 
     <nav class="tabs">
@@ -1405,7 +1466,9 @@ onUnmounted(() => {
   />
 
   <div class="statusbar">
-    <span>{{ t('status.items', info ? info.item_count : currentItems.length) }}</span>
+    <span v-if="view === 'timeline'">
+      {{ t('status.items', info ? info.item_count : currentItems.length) }}
+    </span>
     <span v-if="scanning && scanProgress">
       {{ t('status.scanProgress', { done: scanProgress.progress, total: scanProgress.total }) }}
     </span>
@@ -1416,10 +1479,16 @@ onUnmounted(() => {
   <main>
     <!-- Albums -->
     <section v-if="view === 'albums'" class="albums-view">
-      <div class="create-row">
-        <input v-model="newAlbumName" :placeholder="t('album.createPlaceholder')" @keyup.enter="createAlbum" />
-        <button @click="createAlbum">{{ t('album.create') }}</button>
+      <div class="view-head">
+        <div>
+          <h2>{{ t('nav.albums') }}</h2>
+          <p>{{ t('album.hint') }}</p>
+        </div>
+        <button type="button" class="primary" @click="openAlbumDialog">
+          ＋ {{ t('album.create') }}
+        </button>
       </div>
+
       <div v-if="!albums.length" class="empty">
         <h2>{{ t('empty.noAlbumsTitle') }}</h2>
         <p>{{ t('empty.noAlbumsHint') }}</p>
@@ -1434,6 +1503,34 @@ onUnmounted(() => {
           </div>
           <button class="album-delete" :title="t('album.deleteTitle')" @click.stop="deleteAlbum(album)">×</button>
         </article>
+      </div>
+
+      <div v-if="showAlbumDialog" class="manager-modal" @click.self="closeAlbumDialog">
+        <div class="manager-dialog album-dialog">
+          <h3>{{ t('album.createTitle') }}</h3>
+          <label class="field">
+            <span>{{ t('album.nameLabel') }}</span>
+            <input
+              v-model="newAlbumName"
+              :placeholder="t('album.createPlaceholder')"
+              @keyup.enter="createAlbum"
+            />
+          </label>
+          <p v-if="albumError" class="error">{{ albumError }}</p>
+          <div class="dialog-actions">
+            <button type="button" @click="closeAlbumDialog">
+              {{ t('actions.close') }}
+            </button>
+            <button
+              type="button"
+              class="primary"
+              :disabled="!newAlbumName.trim()"
+              @click="createAlbum"
+            >
+              {{ t('album.create') }}
+            </button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1656,6 +1753,10 @@ onUnmounted(() => {
       </button>
     </template>
   </main>
+
+  <footer class="app-footer">
+    <span>photoSelf{{ info ? ` ${info.version}` : '' }}</span>
+  </footer>
 
   <div v-if="selected" class="lightbox" @click.self="close">
     <button class="close" type="button" :aria-label="t('actions.close')" @click="close">×</button>
