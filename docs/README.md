@@ -2,6 +2,7 @@
 
 - [Installation](installation.md) · [安装文档](installation.zh-CN.md)
 - [Usage](usage.md) · [使用说明](usage.zh-CN.md)
+- [Local development environment](local-development.md)（中文）
 - [AI installation prompt](ai-install-prompt.md) · [AI 安装提示词](ai-install-prompt.zh-CN.md)
 - [Technical design](design.md)（中文）
 - [OpenWrt notes](../deploy/openwrt/README.md)

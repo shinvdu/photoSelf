@@ -24,6 +24,7 @@ The design document (Chinese) lives at [`docs/design.md`](docs/design.md).
 
 - [Installation](docs/installation.md) · [安装文档](docs/installation.zh-CN.md)
 - [Usage](docs/usage.md) · [使用说明](docs/usage.zh-CN.md)
+- [Local development environment](docs/local-development.md)（中文，本地开发环境）
 - [AI installation prompt](docs/ai-install-prompt.md) · [AI 安装提示词](docs/ai-install-prompt.zh-CN.md)
 - [All docs](docs/README.md)
 - [Technical design](docs/design.md)（中文）

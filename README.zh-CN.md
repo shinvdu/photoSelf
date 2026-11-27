@@ -24,6 +24,7 @@
 
 - [安装文档](docs/installation.zh-CN.md) · [English](docs/installation.md)
 - [使用说明](docs/usage.zh-CN.md) · [English](docs/usage.md)
+- [本地开发环境](docs/local-development.md)（中文）
 - [AI 安装提示词](docs/ai-install-prompt.zh-CN.md) · [English](docs/ai-install-prompt.md)
 - [全部文档](docs/README.md)
 - [技术设计](docs/design.md)

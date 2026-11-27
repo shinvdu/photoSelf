@@ -10,3 +10,6 @@
 .DS_Store
 /DEPLOYMENT.local.md
 /release/
+
+# Local development config (docs/local-development.md)
+/config.dev.toml
