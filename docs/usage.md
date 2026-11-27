@@ -32,6 +32,7 @@ The scanner only reads files. It never moves, renames or deletes photos.
 | Scan | Starts a background scan job for all enabled libraries; progress is shown |
 | Lightbox | Image preview with zoom/pan, video playback, metadata, tags, albums, download |
 | Language | 中文 / English switcher; Chinese is the default and the choice is remembered |
+| Theme | Light / dark toggle in the header; follows the OS on first visit, then remembers your choice |
 
 ### Lightbox and mobile layout
 
@@ -45,9 +46,11 @@ The scanner only reads files. It never moves, renames or deletes photos.
   zoomed detail is sharp. For images the lightbox normally uses a **1280 px
   JPEG preview** (`preview_url`), which keeps HEIC files viewable in browsers
   that cannot decode HEIC. The download link always points at the original.
-- **Portrait phones:** metadata and tags move into a collapsible bottom sheet
-  (collapsed by default, tap the filename bar to expand). Swipe left/right to
-  move between photos; the sheet does not block scrolling its own content.
+- **Portrait screens (any width):** metadata, tags and actions move into a
+  collapsible bottom sheet at the bottom of the screen (collapsed by default,
+  tap the filename bar to expand). Swipe left/right to move between photos; the
+  sheet scrolls independently. Rotating the device switches layouts
+  automatically.
 - Desktop keeps the metadata panel on the right; zoom is clipped to the viewer
   so it never covers the panel or the arrows.
 

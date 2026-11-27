@@ -134,4 +134,8 @@ export default {
   language: {
     label: '语言',
   },
+  theme: {
+    toLight: '切换到浅色模式',
+    toDark: '切换到深色模式',
+  },
 }

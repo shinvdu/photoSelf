@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 — 2026-11-27
+
+- Redesigned UI with a softer rose/lavender palette, rounded cards, pill tabs
+  and subtle gradients.
+- Light and dark themes. The first visit follows the OS preference; the header
+  toggle persists the choice in `localStorage` and updates the PWA theme color.
+- Portrait layouts are now selected by **orientation as well as width**, so
+  wide portrait windows also get the mobile layout: metadata, tags and actions
+  live in a collapsible bottom sheet (collapsed by default, tap the filename
+  bar to expand). Rotation switches layouts automatically.
+- Mobile/portrait topbar reworked into a grid: brand + tools, tabs, search,
+  actions, instead of cramped wrapping.
+
 ## 0.5.1 — 2026-11-27
 
 - Album actions in the lightbox now show a toast for success and failures;

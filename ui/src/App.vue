@@ -5,6 +5,21 @@ import { useI18n } from 'vue-i18n'
 const API = '/api/v1'
 const { t, locale } = useI18n({ useScope: 'global' })
 const currentLocale = ref(locale.value)
+const theme = ref(document.documentElement.dataset.theme || 'light')
+
+const THEME_COLORS = { light: '#fff8fb', dark: '#171118' }
+
+function toggleTheme() {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
+  document.documentElement.dataset.theme = theme.value
+  try {
+    localStorage.setItem('photoself-theme', theme.value)
+  } catch {
+    // private mode / disabled storage
+  }
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (meta) meta.setAttribute('content', THEME_COLORS[theme.value])
+}
 const PLACEHOLDER =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -64,12 +79,15 @@ const panX = ref(0)
 const panY = ref(0)
 const dragging = ref(false)
 const hiResLoaded = ref(false)
-const metaOpen = ref(
-  typeof window === 'undefined' || !window.matchMedia
-    ? true
-    : !window.matchMedia('(max-width: 860px)').matches,
-)
+const compactLayout = () =>
+  typeof window !== 'undefined' &&
+  Boolean(window.matchMedia) &&
+  (window.matchMedia('(max-width: 860px)').matches ||
+    window.matchMedia('(orientation: portrait)').matches)
+const metaOpen = ref(!compactLayout())
 const pointers = new Map()
+let layoutQueries = []
+let lastCompact = compactLayout()
 let dragState = null
 let pinchState = null
 let lastTap = { time: 0, x: 0, y: 0 }
@@ -580,6 +598,14 @@ function toggleMeta() {
   metaOpen.value = !metaOpen.value
 }
 
+function onLayoutChange() {
+  const compact = compactLayout()
+  if (compact !== lastCompact) {
+    lastCompact = compact
+    metaOpen.value = !compact
+  }
+}
+
 function openItem(item) {
   resetZoom()
   selected.value = item
@@ -951,6 +977,13 @@ watch(
 
 onMounted(async () => {
   document.documentElement.lang = locale.value
+  const themeMeta = document.querySelector('meta[name="theme-color"]')
+  if (themeMeta) themeMeta.setAttribute('content', THEME_COLORS[theme.value])
+  layoutQueries = [
+    window.matchMedia('(max-width: 860px)'),
+    window.matchMedia('(orientation: portrait)'),
+  ]
+  for (const query of layoutQueries) query.addEventListener('change', onLayoutChange)
   await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
 
   observer = new IntersectionObserver(
@@ -976,6 +1009,7 @@ onUnmounted(() => {
   if (scanTimer) clearTimeout(scanTimer)
   if (transcodeTimer) clearTimeout(transcodeTimer)
   if (toastTimer) clearTimeout(toastTimer)
+  for (const query of layoutQueries) query.removeEventListener('change', onLayoutChange)
   window.removeEventListener('keydown', onKey)
   document.body.classList.remove('modal-open')
 })
@@ -984,7 +1018,7 @@ onUnmounted(() => {
 <template>
   <header class="topbar">
     <div class="brand">
-      <span class="logo">▣</span>
+      <span class="logo">❀</span>
       <span>photoSelf</span>
       <small v-if="info">{{ info.version }}</small>
     </div>
@@ -1018,10 +1052,6 @@ onUnmounted(() => {
     </form>
 
     <div class="actions">
-      <select v-model="currentLocale" :title="t('language.label')" @change="changeLanguage">
-        <option value="zh-CN">中文</option>
-        <option value="en-US">English</option>
-      </select>
       <select v-if="view === 'timeline'" v-model="tagFilter" @change="reloadCurrent">
         <option value="">{{ t('filters.allTags') }}</option>
         <option v-for="tag in tags" :key="tag.id" :value="tag.name">
@@ -1050,6 +1080,22 @@ onUnmounted(() => {
       <button :disabled="scanning" @click="startScan">
         {{ scanning ? t('actions.scanning') : t('actions.scan') }}
       </button>
+    </div>
+
+    <div class="topbar-tools">
+      <button
+        type="button"
+        class="theme-toggle"
+        :title="theme === 'dark' ? t('theme.toLight') : t('theme.toDark')"
+        :aria-label="theme === 'dark' ? t('theme.toLight') : t('theme.toDark')"
+        @click="toggleTheme"
+      >
+        {{ theme === 'dark' ? '☀️' : '🌙' }}
+      </button>
+      <select v-model="currentLocale" :title="t('language.label')" @change="changeLanguage">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+      </select>
     </div>
   </header>
 

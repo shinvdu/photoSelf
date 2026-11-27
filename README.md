@@ -62,7 +62,8 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - PWA / installable offline shell
 - Multilingual UI (Simplified Chinese and English, Chinese by default)
 - Lightbox zoom/pan (wheel, pinch, double-tap, buttons) with original-resolution
-  loading; portrait phones get a collapsible metadata sheet and swipe navigation
+  loading; portrait screens get a collapsible bottom sheet for metadata/actions
+- Pastel light and dark themes (system-aware on first visit, toggle in the header)
 - Optional UI library manager: add/disable/remove directories, trigger per-library
   scans, and browse the server filesystem inside a configured allow-list
 - `none` / `basic` / `proxy` authentication

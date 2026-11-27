@@ -134,4 +134,8 @@ export default {
   language: {
     label: 'Language',
   },
+  theme: {
+    toLight: 'Switch to light mode',
+    toDark: 'Switch to dark mode',
+  },
 }
