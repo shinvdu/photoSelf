@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-11-27
+
+- OpenWrt `postinst`: restore `config.toml-opkg.backup` when upgrading from
+  packages that shipped the config as a conffile, so an upgrade cannot reset a
+  customized configuration to the example.
+
 ## 0.2.1 — 2026-11-27
 
 - OpenWrt package: ship `config.toml.example` and create `config.toml` only on

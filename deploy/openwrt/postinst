@@ -1,8 +1,22 @@
 #!/bin/sh
 # Create the initial config on first install only. Upgrades must never replace
 # an existing /etc/photoself/config.toml.
-if [ ! -f /etc/photoself/config.toml ] && [ -f /etc/photoself/config.toml.example ]; then
-	cp /etc/photoself/config.toml.example /etc/photoself/config.toml
-	chmod 600 /etc/photoself/config.toml
+#
+# When upgrading from an older package that shipped config.toml as a conffile,
+# opkg may move the old file to config.toml-opkg.backup before this script runs.
+# Prefer that backup over the generic example.
+ETC=/etc/photoself
+if [ ! -f "$ETC/config.toml" ]; then
+	for candidate in "$ETC/config.toml-opkg.backup" "$ETC/config.toml-opkg"; do
+		if [ -f "$candidate" ]; then
+			cp "$candidate" "$ETC/config.toml"
+			chmod 600 "$ETC/config.toml"
+			break
+		fi
+	done
+fi
+if [ ! -f "$ETC/config.toml" ] && [ -f "$ETC/config.toml.example" ]; then
+	cp "$ETC/config.toml.example" "$ETC/config.toml"
+	chmod 600 "$ETC/config.toml"
 fi
 exit 0
