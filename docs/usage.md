@@ -14,6 +14,9 @@
 3. Press **Scan** (or run `photoself scan -c config.toml` from the CLI).
 4. The timeline is grouped by day. Use search, favorites, and the lightbox.
 
+If the optional manager is enabled (see [Libraries](#libraries)), directories can
+be added from the **Libraries** tab without editing the config or restarting.
+
 The scanner only reads files. It never moves, renames or deletes photos.
 
 ## UI overview
@@ -23,15 +26,30 @@ The scanner only reads files. It never moves, renames or deletes photos.
 | Timeline | Day-grouped grid, lazy thumbnails, infinite scroll |
 | Albums | Create albums, add/remove items, cover view |
 | Trash | Restore or permanently delete removed items |
+| Libraries | (v0.5+, if `manage.enabled`) add/disable/remove libraries, per-library scan, server-side directory picker |
 | Search / tag filter | Filename and tag filters |
 | Favorites | Filter items marked as favorite |
-| Scan | Starts a background scan job; progress is shown |
-| Lightbox | Image preview (large JPEG thumbnail), video playback, metadata, download |
-| ♥/★ | Toggle favorite on an item |
+| Scan | Starts a background scan job for all enabled libraries; progress is shown |
+| Lightbox | Image preview with zoom/pan, video playback, metadata, tags, albums, download |
+| Language | 中文 / English switcher; Chinese is the default and the choice is remembered |
 
-For images, the lightbox uses a **1280 px JPEG preview** (`preview_url`) instead
-of the original. This keeps HEIC files viewable in browsers that cannot decode
-HEIC. The download link always points at the original file.
+### Lightbox and mobile layout
+
+- **Zoom:** mouse wheel, pinch, double-click/double-tap, or the `−` / `+`
+  controls (the percentage button resets). Range is 1×–5×.
+- **Pan:** drag while zoomed. Navigation arrows and keyboard arrows change
+  items; zoom resets when the item changes.
+- **Keyboard:** `+` / `-` zoom, `0` resets, `←` / `→` previous/next,
+  `Esc` closes.
+- Above roughly **125%** the original file is layered over the preview so
+  zoomed detail is sharp. For images the lightbox normally uses a **1280 px
+  JPEG preview** (`preview_url`), which keeps HEIC files viewable in browsers
+  that cannot decode HEIC. The download link always points at the original.
+- **Portrait phones:** metadata and tags move into a collapsible bottom sheet
+  (collapsed by default, tap the filename bar to expand). Swipe left/right to
+  move between photos; the sheet does not block scrolling its own content.
+- Desktop keeps the metadata panel on the right; zoom is clipped to the viewer
+  so it never covers the panel or the arrows.
 
 ## Libraries
 
@@ -57,8 +75,9 @@ This avoids collisions when two libraries contain a file with the same name.
 
 ### Managing libraries from the UI (v0.5+)
 
-After the first import, libraries are stored in SQLite and can be added,
-disabled or removed from the **Libraries** tab. Enable the manager once:
+The manager is **off by default**. After the first import, libraries are stored
+in SQLite and can be added, disabled or removed from the **Libraries** tab.
+Enable it once in the config and restart:
 
 ```toml
 [manage]
@@ -67,24 +86,44 @@ allowed_roots = ["/mnt/sda1", "/mnt/photos"]
 require_auth = true
 ```
 
-- The UI can only add absolute paths inside `allowed_roots`; the built-in
-  directory picker cannot browse outside them.
+Workflow:
+
+1. Open the **Libraries** tab.
+2. Press **Add library**, then either type an absolute path or press
+   **Browse** and navigate the server-side directory picker.
+3. Optionally set a display name and keep **Read-only** checked.
+4. Confirm with **Add and scan**. The library appears immediately and a scan
+   job starts; progress is shown in the status bar.
+
+Per card you can **Scan**, **Enable/Disable**, or **Remove**. `config.toml` is
+no longer edited by the UI.
+
+- The UI can only add absolute paths inside `allowed_roots`; the directory
+  picker cannot browse outside them.
 - The server rejects paths that overlap `data.dir`, the thumbnail cache,
   sidecar/trash directories, or another library (nested libraries would index
-  files twice).
+  files twice). Symlinks are resolved and must stay inside the allow-list.
 - **Remove** deletes index rows, tags and album links. Source files and
-  pre-generated sidecars are never touched.
+  pre-generated sidecars are never touched. Trash index rows for that library
+  are dropped, but trash files stay on disk.
 - Disabling a library keeps its index but excludes it from scans and the
-  timeline.
+  timeline. Disabling an index-backed library persists across restarts.
 - `config.toml` is only used to seed new ids and to upgrade pre-v0.5 rows.
-  **Re-import from config** forcibly reapplies config values to matching ids.
-- With `auth.mode = "none"`, set `require_auth = false` explicitly if you
-  really want an unauthenticated LAN manager; the default refuses it.
+  **Re-import from config** forcibly reapplies config values (name, path,
+  enabled state, ignore globs) to matching ids and clears removed tombstones;
+  libraries added in the UI are untouched.
+- With `auth.mode = "none"`, management is refused by default. Set
+  `require_auth = false` explicitly if you really want an unauthenticated LAN
+  manager.
 
 ## Scanning
 
-- **Manual:** press **Scan** in the UI or `POST /api/v1/scan`.
+- **Manual:** press **Scan** in the header to scan every enabled library, or
+  **Scan** on a card in the **Libraries** tab to scan just that one. The API is
+  `POST /api/v1/scan` (all) or `POST /api/v1/libraries/{id}/scan` (one).
 - **CLI:** `photoself scan -c config.toml` (optionally `--library family`).
+  The CLI imports config libraries into the database first, then scans the
+  database registry, so it sees the same libraries as the UI.
 - **On start:** `scan.on_start = true` (default in the example config).
 - **Incremental:** unchanged size+mtime reuses the cached hash; scans on slow
   USB/NAND devices stay cheap.
@@ -132,6 +171,48 @@ curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/jobs/<job-id>
 
 Cursor pagination: pass the returned `next_cursor` as `cursor`. Filters:
 `library`, `kind` (`image`/`video`), `q`, `favorite`, `from`, `to`, `limit`.
+
+`GET /api/v1/info` reports `manage_enabled` so clients can hide the manager.
+
+### Library management API (v0.5+)
+
+Requires `[manage] enabled = true`; writes also need `X-Requested-With:
+photoSelf`. With `auth.mode = "none"` and `require_auth = true` every endpoint
+below returns `403`.
+
+```bash
+AUTH='-u admin:password'
+J='-H Content-Type:application/json -H X-Requested-With:photoSelf'
+B=http://127.0.0.1:8787/api/v1
+
+# list libraries (path, source, enabled, item_count, ...)
+curl $AUTH "$B/libraries"
+
+# add a library; triggers a scan job
+curl $AUTH $J -X POST -d '{"path":"/mnt/sda1/photos","name":"Photos","read_only":true}' \
+  "$B/libraries"
+
+# rename / disable / enable / change ignore globs
+curl $AUTH $J -X PATCH -d '{"name":"Family","enabled":false}' "$B/libraries/<id>"
+
+# scan one library
+curl $AUTH $J -X POST "$B/libraries/<id>/scan"
+
+# explicitly re-apply config.toml values to matching ids
+curl $AUTH $J -X POST "$B/libraries/import-config"
+
+# remove index only (source files stay)
+curl $AUTH $J -X DELETE "$B/libraries/<id>"
+
+# server-side directory browser (confined to manage.allowed_roots)
+curl $AUTH "$B/fs/dirs?path=/mnt/sda1"
+curl $AUTH "$B/fs/dirs"        # list the allowed roots
+```
+
+`POST /api/v1/libraries` accepts `path` (required), `name`, `read_only`
+(default `true`) and `ignore_globs` (default `["._*", ".DS_Store", "@eaDir",
+"#recycle"]`). Paths are canonicalized; `data.dir`, thumbnail/sidecar/trash
+trees and overlapping libraries are rejected.
 
 The media endpoint supports HTTP Range requests:
 
@@ -224,14 +305,18 @@ the internet directly.
 
 | Path | Contents |
 |---|---|
-| `data.dir/photoself.db` | SQLite index + user metadata |
+| `data.dir/photoself.db` | SQLite index, user metadata and the runtime library registry |
 | `data.dir/cache/thumbs/` | generated thumbnails (disposable) |
 | `data.dir/cache/tmp/` | temporary files |
 | `thumbnails.sidecar_dir` | pre-generated previews/metadata (optional) |
 
-- Back up `data.dir` if favorites/metadata matter.
-- Deleting the database is safe: a scan rebuilds the index; favorites are lost.
-- Photo roots are never modified.
+- Back up `data.dir` if favorites, tags, albums or the UI-managed library list
+  matter.
+- Deleting the database is safe: a scan rebuilds the index; favorites/tags and
+  UI-added libraries are lost (config `[[libraries]]` are re-imported on the
+  next start).
+- Photo roots are never modified, including when a library is removed in the
+  UI.
 - Sidecars can be regenerated at any time.
 
 ## Performance tips for 512 MB devices
@@ -260,6 +345,10 @@ concurrency = 1
 ## Known behavior and limitations
 
 - Write mode is off by default; enabling it lets the API modify the library.
+- UI library management is off by default and requires an explicit
+  `[manage].allowed_roots` allow-list plus authentication.
+- Removing a library deletes its index, tags and album links permanently; there
+  is no undo. The source directory is left untouched.
 - Trash retention is manual; purge old entries yourself.
 - Video playback uses the original unless a web MP4 is generated; MOV/HEVC
   compatibility depends on the browser (Safari/Apple often works; Chrome/Firefox may not).
@@ -269,3 +358,7 @@ concurrency = 1
 - `search` is a filename `LIKE` query, not full-text search.
 - The UI shows all libraries in one timeline; per-library filtering is planned.
 - Tags/albums are metadata only; no automatic file organization.
+- The UI language defaults to Simplified Chinese; switching to English is
+  remembered per browser (`localStorage`). Server error text remains English.
+- Library rename is available through `PATCH /api/v1/libraries/{id}`; the UI
+  currently exposes enable/disable, scan and remove.

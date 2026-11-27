@@ -11,8 +11,11 @@
    ```
 
 2. 打开 `http://127.0.0.1:8787/`。
-3. 点击 **Scan**（或命令行执行 `photoself scan -c config.toml`）。
+3. 点击 **扫描**（或命令行执行 `photoself scan -c config.toml`）。
 4. 时间线按天分组；可以搜索、收藏、打开灯箱。
+
+如果启用了可选的媒体库管理（见下文「媒体库」），可以直接在「媒体库」页添加目录，
+无需改配置或重启。
 
 扫描只读取文件，不会移动、重命名或删除照片。
 
@@ -21,16 +24,27 @@
 | 区域 | 作用 |
 |---|---|
 | 时间线 | 按天分组的网格、懒加载缩略图、无限滚动 |
-| Albums | 创建相册、增删条目、封面视图 |
-| Trash | 恢复或永久删除回收站条目 |
+| 相册 | 创建相册、增删条目、封面视图 |
+| 回收站 | 恢复或永久删除回收站条目 |
+| 媒体库 | （v0.5+，需 `manage.enabled`）添加/停用/移除媒体库、单库扫描、服务端目录选择器 |
 | 搜索/标签 | 文件名与标签筛选 |
 | 收藏 | 只看已收藏条目 |
-| 扫描 | 启动后台扫描任务并显示进度 |
-| 灯箱 | 大图预览（1280 JPEG）、视频播放、元数据、下载 |
-| ★ | 切换收藏 |
+| 扫描 | 为所有启用的媒体库启动后台扫描并显示进度 |
+| 灯箱 | 图片缩放/拖动、视频播放、元数据、标签、相册、下载 |
+| 语言 | 中文 / English 切换；默认中文，选择会记住 |
 
-图片灯箱使用 **1280 px JPEG 预览**（`preview_url`），而不是原文件；这样即使浏览器
-不能解码 HEIC 也能正常显示。下载链接仍然指向原文件。
+### 灯箱与竖屏布局
+
+- **缩放**：滚轮、双指捏合、双击/双指双击，或 `−` / `+` 按钮（中间的百分比
+  按钮复位）。范围 1×–5×。
+- **拖动**：放大后拖拽查看局部；左右箭头或键盘方向键切换条目，切换时自动复位缩放。
+- **键盘**：`+` / `-` 缩放，`0` 复位，`←` / `→` 上一张/下一张，`Esc` 关闭。
+- 放大到约 **125%** 以上时会在预览图上层加载原图，保证细节清晰。图片灯箱默认使用
+  **1280 px JPEG 预览**（`preview_url`），这样即使浏览器不能解码 HEIC 也能显示；
+  下载链接始终指向原文件。
+- **竖屏手机**：元数据/标签/相册操作移入底部抽屉，默认收起，点击文件名栏展开；
+  左右滑动切换图片。桌面端保持右侧信息栏，缩放画面会被裁剪在查看区域内，不会
+  盖住信息栏或翻页按钮。
 
 ## 媒体库
 
@@ -56,8 +70,8 @@ ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
 
 ### 在界面管理媒体库（v0.5+）
 
-首次导入后，媒体库以 SQLite 为准，可以在界面的「媒体库」页添加、停用或移除。
-先在配置里开启一次：
+管理功能**默认关闭**。首次导入后，媒体库以 SQLite 为准，可以在「媒体库」页添加、
+停用或移除。先在配置里开启一次并重启：
 
 ```toml
 [manage]
@@ -66,20 +80,35 @@ allowed_roots = ["/mnt/sda1", "/mnt/photos"]
 require_auth = true
 ```
 
-- 界面只能添加 `allowed_roots` 内的绝对路径；内置目录选择器也不会越过白名单。
+操作流程：
+
+1. 打开「媒体库」页。
+2. 点「添加媒体库」，可以直接输入绝对路径，或点「浏览目录」在服务端目录选择器中
+   逐级选择。
+3. 可选填显示名称，建议保持勾选「只读」。
+4. 点「添加并扫描」。库会立即出现并启动扫描，状态栏显示进度。
+
+每张卡片可以**扫描**、**启用/停用**、**移除**；界面不会修改 `config.toml`。
+
+- 界面只能添加 `allowed_roots` 内的绝对路径；内置目录选择器不会越过白名单。
+  符号链接会先解析，解析后仍必须在白名单内。
 - 服务端会拒绝与 `data.dir`、缩略图缓存、sidecar/回收站目录或已有媒体库重叠的路径
   （嵌套目录会被重复索引）。
-- **移除**只删除索引、标签和相册关联，原文件和预生成 sidecar 不会被删除。
-- 停用会保留索引，但不再参与扫描和时间线。
+- **移除**只删除索引、标签和相册关联，原文件和预生成 sidecar 不会被删除；
+  该库的回收站索引行会被清掉，但回收站里的文件保留在磁盘上。
+- 停用会保留索引，但不再参与扫描和时间线；对配置来源的库，停用状态重启后保持。
 - `config.toml` 只用于补充新 id 和升级 v0.5 之前的旧记录；「从配置重新导入」
-  会用配置强制覆盖同 id 记录。
+  会用配置强制覆盖同 id 记录的名称、路径、启用状态、忽略规则，并清除已删除墓碑；
+  界面新增的库不受影响。
 - `auth.mode = "none"` 时默认拒绝管理接口；确实需要无认证局域网管理时，
   显式设置 `require_auth = false`。
 
 ## 扫描
 
-- **手动**：UI 点击 **Scan**，或 `POST /api/v1/scan`。
+- **手动**：点顶栏「扫描」扫描所有启用的库；或在「媒体库」卡片上点「扫描」只扫
+  该库。API 分别是 `POST /api/v1/scan` 和 `POST /api/v1/libraries/{id}/scan`。
 - **命令行**：`photoself scan -c config.toml`（可加 `--library family`）。
+  命令行会先把配置里的库导入数据库，再按数据库中的注册表扫描，与界面看到的库一致。
 - **启动时扫描**：`scan.on_start = true`（示例配置默认）。
 - **增量**：size+mtime 未变的文件复用已有哈希；USB/NAND 上的重复扫描很轻。
 - **缺失文件**：标记为 missing，不再从 API 返回，但不会删除数据库记录。
@@ -126,6 +155,46 @@ curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/jobs/<job-id>
 游标分页：把返回的 `next_cursor` 作为 `cursor` 传入。可用过滤：
 `library`、`kind`（`image`/`video`）、`q`、`favorite`、`from`、`to`、`limit`。
 
+`GET /api/v1/info` 会返回 `manage_enabled`，前端据此决定是否显示管理入口。
+
+### 媒体库管理 API（v0.5+）
+
+需要 `[manage] enabled = true`；写操作还要带 `X-Requested-With: photoSelf`。
+`auth.mode = "none"` 且 `require_auth = true` 时，以下接口全部返回 `403`。
+
+```bash
+AUTH='-u admin:password'
+J='-H Content-Type:application/json -H X-Requested-With:photoSelf'
+B=http://127.0.0.1:8787/api/v1
+
+# 列出媒体库（path、source、enabled、item_count 等）
+curl $AUTH "$B/libraries"
+
+# 添加媒体库，并自动启动扫描
+curl $AUTH $J -X POST -d '{"path":"/mnt/sda1/photos","name":"照片","read_only":true}' \
+  "$B/libraries"
+
+# 改名 / 停用 / 启用 / 改忽略规则
+curl $AUTH $J -X PATCH -d '{"name":"家庭照片","enabled":false}' "$B/libraries/<id>"
+
+# 单库扫描
+curl $AUTH $J -X POST "$B/libraries/<id>/scan"
+
+# 用 config.toml 强制覆盖同 id 记录
+curl $AUTH $J -X POST "$B/libraries/import-config"
+
+# 移除媒体库（只删索引，不动原文件）
+curl $AUTH $J -X DELETE "$B/libraries/<id>"
+
+# 服务端目录浏览（限定在 manage.allowed_roots 内）
+curl $AUTH "$B/fs/dirs?path=/mnt/sda1"
+curl $AUTH "$B/fs/dirs"        # 列出允许的根目录
+```
+
+`POST /api/v1/libraries` 接受 `path`（必填）、`name`、`read_only`（默认
+`true`）、`ignore_globs`（默认 `["._*", ".DS_Store", "@eaDir", "#recycle"]`）。
+路径会做 canonicalize；`data.dir`、缩略图/sidecar/回收站目录以及重叠的库都会被拒绝。
+
 媒体接口支持 HTTP Range：
 
 ```bash
@@ -161,12 +230,12 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 
 - **标签**：打开条目，在灯箱里输入/选择标签，顶部可按标签筛选。
   `POST /api/v1/tags` 创建标签；`POST /api/v1/items/{id}/tags` 挂载。
-- **相册**：切到 **Albums** 创建相册，在灯箱中把当前条目加入相册。
+- **相册**：切到「相册」创建相册，在灯箱中把当前条目加入相册。
   相册只是虚拟关系，不移动文件。
-- **上传**：`[write] enabled = true` 且库可写时，点击 **Upload** 选择图片/视频。
+- **上传**：`[write] enabled = true` 且库可写时，点击「上传」选择图片/视频。
   服务端先写临时文件，随后立即索引。
-- **删除/回收站**：灯箱的 **Delete** 会把文件移到
-  `<data.dir>/trash/<library-id>/` 并把行标记为 missing。打开 **Trash** 恢复
+- **删除/回收站**：灯箱的「删除」会把文件移到
+  `<data.dir>/trash/<library-id>/` 并把行标记为 missing。打开「回收站」恢复
   或永久删除。
 - **搜索过滤**：文件名、收藏、标签过滤作用于时间线；API 还支持
   `kind`、`library`、`from`、`to`、`album`。
@@ -174,7 +243,7 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 ## 网页版视频
 
 设置 `video.transcode_enabled = true`，并确保 `ffmpeg` 带 `libx264` 和 `aac`。
-在灯箱中点击 **Generate web version**；服务端会在 `data/cache/derived/` 排队生成，
+在灯箱中点击「生成网页版」；服务端会在 `data/cache/derived/` 排队生成，
 并返回 `play_url`（H.264/AAC MP4）。
 
 ## 定时扫描与 PWA
@@ -213,14 +282,15 @@ mode = "proxy"
 
 | 路径 | 内容 |
 |---|---|
-| `data.dir/photoself.db` | SQLite 索引 + 用户元数据 |
+| `data.dir/photoself.db` | SQLite 索引、用户元数据和运行期媒体库注册表 |
 | `data.dir/cache/thumbs/` | 生成的缩略图（可丢弃） |
 | `data.dir/cache/tmp/` | 临时文件 |
 | `thumbnails.sidecar_dir` | 预生成预览/元数据（可选） |
 
-- 收藏/元数据重要时备份 `data.dir`。
-- 删除数据库是安全的：重新扫描即可重建索引；收藏会丢失。
-- 照片根目录永远不会被修改。
+- 收藏、标签、相册或界面维护的媒体库列表重要时，备份 `data.dir`。
+- 删除数据库是安全的：重新扫描即可重建索引；收藏/标签和界面新增的媒体库会丢失
+  （配置里的 `[[libraries]]` 会在下次启动时重新导入）。
+- 照片根目录永远不会被修改，界面移除媒体库也一样。
 - Sidecar 可随时重新生成。
 
 ## 512 MB 设备的性能建议
@@ -249,6 +319,8 @@ concurrency = 1
 ## 已知行为与限制
 
 - 写入模式默认关闭；开启后 API 可以修改照片库。
+- 界面媒体库管理默认关闭，需要显式配置 `[manage].allowed_roots` 白名单并要求认证。
+- 移除媒体库会永久删除索引、标签和相册关联，没有撤销；源目录不受影响。
 - 回收站不会自动过期，需要手动清除旧条目。
 - 视频默认播放原文件；生成 web MP4 后才能在所有浏览器播放。MOV/HEVC 兼容性
   取决于浏览器（Safari/Apple 通常可以，Chrome/Firefox 可能不行）。
@@ -257,3 +329,5 @@ concurrency = 1
 - 搜索是对文件名做 `LIKE`，不是全文搜索。
 - UI 目前把所有库混在一条时间线里；按库筛选在计划中。
 - 标签/相册只是元数据，不会自动整理文件。
+- 界面默认简体中文；切换英文会按浏览器记住（`localStorage`）。服务端错误信息仍是英文。
+- 改名可通过 `PATCH /api/v1/libraries/{id}` 完成；界面目前提供启用/停用、扫描和移除。
