@@ -957,11 +957,14 @@ async function uploadFiles(files) {
   const library = uploadLibrary.value
   if (!library) {
     error.value = t('errors.noWritableLibrary')
+    showToast(t('errors.noWritableLibrary'), true)
     return
   }
   uploading.value = true
   error.value = ''
   let done = 0
+  let failed = 0
+  let lastError = ''
   for (const file of files) {
     const form = new FormData()
     form.append('library', library)
@@ -975,14 +978,23 @@ async function uploadFiles(files) {
         name: file.name,
       })
     } catch (err) {
-      error.value = t('errors.uploadFailed', { name: file.name, message: err.message })
-      break
+      failed += 1
+      lastError = t('errors.uploadFailed', {
+        name: file.name,
+        message: err.message,
+      })
+      error.value = lastError
     }
   }
   uploading.value = false
   await loadInfo()
   if (view.value === 'timeline') await loadItems(true)
   if (view.value === 'album') await loadAlbumItems()
+  if (failed) {
+    showToast(t('upload.failed', { failed, message: lastError }), true)
+  } else if (done) {
+    showToast(t('upload.done', { count: done }))
+  }
 }
 
 async function createTag() {
@@ -1647,6 +1659,16 @@ onUnmounted(() => {
 
   <div v-if="selected" class="lightbox" @click.self="close">
     <button class="close" type="button" :aria-label="t('actions.close')" @click="close">×</button>
+    <button
+      class="info-toggle"
+      type="button"
+      :class="{ active: metaOpen }"
+      :aria-label="metaOpen ? t('lightbox.hideInfo') : t('lightbox.showInfo')"
+      :title="metaOpen ? t('lightbox.hideInfo') : t('lightbox.showInfo')"
+      @click="toggleMeta"
+    >
+      ⓘ
+    </button>
     <button class="nav prev" type="button" :aria-label="t('actions.previous')" @click.stop="prev">‹</button>
 
     <div class="viewer">

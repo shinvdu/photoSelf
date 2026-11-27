@@ -1679,3 +1679,108 @@ body {
     text-align: center;
   }
 }
+
+/* ---- landscape full-bleed lightbox -------------------------------- */
+
+.info-toggle {
+  display: none;
+}
+
+@media (orientation: landscape) and (min-width: 861px) {
+  .lightbox {
+    gap: 0;
+    padding: 5px;
+  }
+
+  .lightbox .viewer {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .zoom-stage,
+  .zoom-stage img {
+    max-width: 100%;
+    max-height: calc(100vh - 10px);
+  }
+
+  .zoom-stage img {
+    border-radius: 6px;
+  }
+
+  .lightbox .viewer video {
+    max-width: 100%;
+    max-height: calc(100vh - 10px);
+  }
+
+  .lightbox .nav {
+    position: absolute;
+    top: 50%;
+    z-index: 9;
+    transform: translateY(-50%);
+  }
+
+  .lightbox .nav.prev {
+    left: 12px;
+  }
+
+  .lightbox .nav.next {
+    right: 12px;
+  }
+
+  .lightbox:has(.meta.open) .nav.next {
+    right: 324px;
+  }
+
+  .lightbox .meta {
+    position: absolute;
+    top: 64px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 8;
+    width: 300px;
+    max-height: none;
+    overflow: auto;
+    opacity: 1;
+    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+  }
+
+  .lightbox .meta:not(.open) {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(16px);
+  }
+
+  .zoom-controls {
+    right: auto;
+    bottom: 12px;
+    left: 12px;
+  }
+
+  .info-toggle {
+    position: absolute;
+    top: 14px;
+    right: 64px;
+    z-index: 11;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    color: var(--text);
+    font-size: 18px;
+    backdrop-filter: blur(8px);
+  }
+
+  .info-toggle.active {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    color: var(--accent);
+  }
+}

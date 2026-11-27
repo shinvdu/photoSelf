@@ -71,8 +71,10 @@ The scanner only reads files. It never moves, renames or deletes photos.
   tap the filename bar to expand). Swipe left/right to move between photos; the
   sheet scrolls independently. Rotating the device switches layouts
   automatically.
-- Desktop keeps the metadata panel on the right; zoom is clipped to the viewer
-  so it never covers the panel or the arrows.
+- **Landscape/desktop:** the photo fills the window with a 5 px margin. The
+  metadata panel floats over the right edge and the ⓘ button toggles it; close,
+  zoom controls and navigation arrows stay visible. Zoom is clipped to the
+  viewer so the image does not spill outside the screen.
 
 ## Libraries
 

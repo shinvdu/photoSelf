@@ -94,6 +94,10 @@ export default {
     scanFailed: 'Scan failed',
     uploadFailed: 'Upload failed ({name}): {message}',
   },
+  upload: {
+    done: 'Uploaded {count} file(s)',
+    failed: '{failed} file(s) failed to upload: {message}',
+  },
   batch: {
     select: 'Select',
     cancel: 'Cancel selection',

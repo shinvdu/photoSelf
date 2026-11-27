@@ -94,6 +94,10 @@ export default {
     scanFailed: '扫描失败',
     uploadFailed: '上传失败（{name}）：{message}',
   },
+  upload: {
+    done: '已上传 {count} 个文件',
+    failed: '{failed} 个文件上传失败：{message}',
+  },
   batch: {
     select: '选择',
     cancel: '取消选择',

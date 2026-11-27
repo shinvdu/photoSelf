@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-11-27
+
+- Uploading files now shows a toast on completion ("Uploaded N files") and a
+  red toast for partial failures; previously only the status bar updated.
+- Landscape/desktop lightbox is full-bleed: the photo fills the window with a
+  5 px margin, the metadata panel floats over the right edge with an ⓘ toggle,
+  and the next arrow moves left of the panel so it is never covered.
+
 ## 0.7.0 — 2026-11-27
 
 - Thumbnail context menu on right-click (or touch long-press): view, download,
