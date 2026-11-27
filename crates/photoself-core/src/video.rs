@@ -30,7 +30,11 @@ pub fn transcode(
         std::process::id()
     ));
 
-    let scale = format!("scale='min({},iw)':-2", video.transcode_max_width.max(320));
+    let width = video.transcode_max_width.max(320);
+    let height = video.max_height.max(240);
+    let scale = format!(
+        "scale='min({width},iw)':'min({height},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    );
     let mut child = Command::new(&ffmpeg.ffmpeg_path)
         .args(["-v", "error", "-y", "-i"])
         .arg(source)

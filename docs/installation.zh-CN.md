@@ -231,7 +231,8 @@ password_hash = "$argon2id$..."
 ```
 
 Basic 模式是单用户。若在可信反向代理后，可用 `auth.mode = "proxy"`；代理必须
-完成认证并设置 `X-Forwarded-User`。
+完成认证并设置 `X-Forwarded-User`。应用只接受来自 `server.trusted_proxies`
+（CIDR 或裸 IP）网段的该请求头；默认只信任 loopback。
 
 
 ### 写入模式、回收站与视频派生

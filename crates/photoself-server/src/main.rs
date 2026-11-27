@@ -96,10 +96,13 @@ async fn serve(config_path: PathBuf) -> Result<()> {
         "photoSelf starting"
     );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server error")
 }
 
 fn scan(config_path: PathBuf, library_filter: Option<String>) -> Result<()> {
@@ -168,7 +171,7 @@ fn parse_scan_interval(raw: &str) -> Option<Duration> {
         "d" | "day" | "days" => 24 * 60 * 60,
         _ => return None,
     };
-    Some(Duration::from_secs(value * multiplier))
+    Some(Duration::from_secs(value.checked_mul(multiplier)?))
 }
 
 fn spawn_scan_scheduler(state: state::AppState) {
@@ -190,4 +193,20 @@ fn spawn_scan_scheduler(state: state::AppState) {
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_intervals() {
+        assert_eq!(parse_scan_interval("0"), None);
+        assert_eq!(parse_scan_interval("15m"), Some(Duration::from_secs(900)));
+        assert_eq!(parse_scan_interval("1h"), Some(Duration::from_secs(3600)));
+        assert_eq!(parse_scan_interval("2d"), Some(Duration::from_secs(172800)));
+        assert_eq!(parse_scan_interval("15"), None);
+        assert_eq!(parse_scan_interval("15x"), None);
+        assert_eq!(parse_scan_interval("99999999999999999999d"), None);
+    }
 }

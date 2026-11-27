@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.3 — 2026-11-27
+
+Security and data-safety fixes from the code review:
+
+- Upload overwrite uses an atomic rename instead of deleting the old file first.
+- Trash delete records the DB entry before moving the file and removes it on
+  move failure; restore is transactional and rolls back the copied file on DB
+  failure.
+- `auth.mode = "proxy"` now only accepts `X-Forwarded-User` from peers in
+  `server.trusted_proxies` (CIDR/bare IP).
+- Upload rejects parent directories that resolve outside the library root.
+- Sidecar temp files are unique per process/request.
+- All POST/PUT/PATCH/DELETE API calls require `X-Requested-With: photoSelf`.
+- Trash list no longer exposes the absolute `trash_path`.
+- Album/tag endpoints return 404 for missing items/tags/albums.
+- `video.max_height` is now honored during transcode.
+- Added server integration tests for upload/trash/restore/CSRF, tags/albums,
+  transcode queue, interval parsing and trusted proxy matching.
+
 ## 0.2.2 — 2026-11-27
 
 - OpenWrt `postinst`: restore `config.toml-opkg.backup` when upgrading from

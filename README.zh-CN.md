@@ -149,7 +149,7 @@ read_only = true
 - `server.listen` —— 绑定地址；反向代理后面用 `127.0.0.1:8787`，可信局域网可用 `0.0.0.0:8787`
 - `data.dir` —— SQLite、缩略图缓存、临时文件
 - `media.serve_mode` —— `standalone`（本进程提供媒体）或 `proxy`（反向代理提供 `/media`、`/thumbs`）
-- `auth.mode` —— `none`、`basic`（单用户，Argon2id）、`proxy`（信任 `X-Forwarded-User`）
+- `auth.mode` —— `none`、`basic`（单用户，Argon2id）、`proxy`（只信任 `server.trusted_proxies` 网段发来的 `X-Forwarded-User`）
 - `thumbnails.concurrency` —— 512 MB 设备建议 `1`
 - `scan.hash` —— 内容哈希用于重命名识别；只有极慢存储才建议关闭
 - `scan.interval` —— 定时扫描，如 `15m`、`1h`；`0` 关闭
@@ -353,16 +353,18 @@ cd ui && npm install && npm run dev
 
 ## 状态与已知限制
 
-这是 **v0.1 MVP**，不是完成品：
+这是 **v0.2 MVP**，不是完成品：
 
-- 标签、相册、上传/删除、回收站、分享链接尚未实现。
-- 视频按原文件播放，不做转码；MOV/HEVC 的兼容性取决于浏览器。
-- `scan.interval`、`scan.concurrency`、`ffmpeg.concurrency`、
-  `missing_retention_days`、`thumbnails.prewarm_on_scan`、
-  `video.transcode_enabled`、`video.max_height`、`trash.*`、
-  `auth.session_ttl_hours`、`server.base_path`、`server.ui_embedded`、
-  `server.trusted_proxies` 目前是保留字段。
-- `auth.mode = "proxy"` 信任 `X-Forwarded-User`，只能放在会清理客户端头的可信代理后面。
+- 写入模式（上传/删除/回收站）默认关闭；请显式开启，并让 API 处于认证之后。
+  只有需要写入时才让照片库可写。
+- 视频默认播放原文件；生成 web MP4 后才能在所有浏览器中播放，且取决于 ffmpeg
+  是否支持对应解码/编码。
+- 回收站保留期不会自动清理，需要手动清除旧条目。
+- 保留/未完全强制的字段：`scan.concurrency`、`missing_retention_days`、
+  `thumbnails.prewarm_on_scan`、`auth.session_ttl_hours`、`server.base_path`、
+  `server.ui_embedded`。
+- `auth.mode = "proxy"` 只信任来自 `server.trusted_proxies` 网段的
+  `X-Forwarded-User`；仍应放在会清理客户端头的可信代理后面。
 - 无时区的 EXIF 日期按本地裸时间存储。
 - HEIC/RAW 可被索引；缩略图依赖 sidecar 或带相应解码器的 ffmpeg。
 - SQLite 使用 `bundled` 编译；交叉编译需要 C 编译器（zigbuild 或 OpenWrt SDK）。

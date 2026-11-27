@@ -584,6 +584,16 @@ impl Db {
         Ok(conn.execute("DELETE FROM tags WHERE id = ?1", params![id])? > 0)
     }
 
+    pub fn tag_exists(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tags WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
+    }
+
     pub fn add_item_tag(&self, item_id: &str, tag_id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -752,6 +762,19 @@ impl Db {
     pub fn delete_trash_row(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM trash WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Mark an item present and remove its trash row in one transaction.
+    pub fn complete_trash_restore(&self, item_id: &str, trash_id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE items SET missing = 0, updated_at = ?2 WHERE id = ?1",
+            params![item_id, now_str()],
+        )?;
+        tx.execute("DELETE FROM trash WHERE id = ?1", params![trash_id])?;
+        tx.commit()?;
         Ok(())
     }
 

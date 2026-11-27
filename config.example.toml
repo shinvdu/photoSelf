@@ -12,7 +12,8 @@ listen = "0.0.0.0:8787"
 ui_dir = "ui/dist"
 # Reserved; embedding is a compile-time feature (`--features embed-ui`).
 ui_embedded = false
-# Reserved: proxy-header trust list is documented but not enforced in v0.1.
+# Required when auth.mode = "proxy": only peers in these CIDRs may set
+# X-Forwarded-User.
 trusted_proxies = ["127.0.0.1/32", "::1/128"]
 
 [data]

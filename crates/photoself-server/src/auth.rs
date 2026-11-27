@@ -17,11 +17,27 @@ pub async fn require_auth(State(state): State<AppState>, request: Request, next:
     match state.config.auth.mode.as_str() {
         "none" => next.run(request).await,
         "proxy" => {
-            if request.headers().contains_key("x-forwarded-user") {
-                next.run(request).await
-            } else {
-                unauthorized(false)
+            let has_user = request
+                .headers()
+                .get("x-forwarded-user")
+                .and_then(|value| value.to_str().ok())
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false);
+            if !has_user {
+                return unauthorized(false);
             }
+            let Some(peer) = request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0)
+            else {
+                return unauthorized(false);
+            };
+            if !state.is_trusted_proxy(peer.ip()) {
+                tracing::warn!(peer = %peer, "rejected X-Forwarded-User from untrusted peer");
+                return unauthorized(false);
+            }
+            next.run(request).await
         }
         "basic" => {
             let Some(value) = request

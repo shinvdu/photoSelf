@@ -48,7 +48,11 @@ let transcodeTimer = null
 
 async function api(path, options = {}) {
   const isForm = options.body instanceof FormData
-  const headers = { Accept: 'application/json', ...(options.headers || {}) }
+  const headers = {
+    Accept: 'application/json',
+    'X-Requested-With': 'photoSelf',
+    ...(options.headers || {}),
+  }
   if (options.body && !isForm) headers['Content-Type'] = 'application/json'
   const response = await fetch(path, { ...options, headers })
   if (!response.ok) {

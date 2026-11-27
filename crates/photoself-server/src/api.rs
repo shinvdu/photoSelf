@@ -62,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/scan", post(scan_handler))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/jobs/{id}", get(get_job))
+        .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -140,6 +141,24 @@ impl IntoResponse for ApiError {
         );
         response
     }
+}
+
+async fn csrf_guard(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let method = request.method();
+    let needs_guard = method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE;
+    if needs_guard
+        && request
+            .headers()
+            .get("x-requested-with")
+            .and_then(|value| value.to_str().ok())
+            != Some("photoSelf")
+    {
+        return (StatusCode::FORBIDDEN, "missing X-Requested-With: photoSelf").into_response();
+    }
+    next.run(request).await
 }
 
 async fn healthz() -> Json<Value> {
@@ -428,9 +447,18 @@ async fn add_item_tag(
     AxumPath(id): AxumPath<String>,
     Json(body): Json<TagLink>,
 ) -> Result<Json<Value>, ApiError> {
+    let _ = fetch_item(&state, &id).await?;
+    let db = state.db.clone();
+    let tag_id = body.tag_id;
+    let exists = tokio::task::spawn_blocking(move || db.tag_exists(tag_id))
+        .await
+        .map_err(ApiError::internal)??;
+    if !exists {
+        return Err(ApiError::not_found("tag not found"));
+    }
     let db = state.db.clone();
     let item_id = id.clone();
-    tokio::task::spawn_blocking(move || db.add_item_tag(&item_id, body.tag_id))
+    tokio::task::spawn_blocking(move || db.add_item_tag(&item_id, tag_id))
         .await
         .map_err(ApiError::internal)??;
     let item = fetch_item(&state, &id).await?;
@@ -441,6 +469,14 @@ async fn remove_item_tag(
     State(state): State<AppState>,
     AxumPath((id, tag_id)): AxumPath<(String, i64)>,
 ) -> Result<Json<Value>, ApiError> {
+    let _ = fetch_item(&state, &id).await?;
+    let db = state.db.clone();
+    let exists = tokio::task::spawn_blocking(move || db.tag_exists(tag_id))
+        .await
+        .map_err(ApiError::internal)??;
+    if !exists {
+        return Err(ApiError::not_found("tag not found"));
+    }
     let db = state.db.clone();
     let item_id = id.clone();
     tokio::task::spawn_blocking(move || db.remove_item_tag(&item_id, tag_id))
@@ -513,6 +549,15 @@ async fn album_items(
     AxumPath(id): AxumPath<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let album_id = id.clone();
+    let exists = tokio::task::spawn_blocking(move || db.get_album(&album_id))
+        .await
+        .map_err(ApiError::internal)??
+        .is_some();
+    if !exists {
+        return Err(ApiError::not_found("album not found"));
+    }
     let query = ItemQuery {
         library_id: params.library,
         kind: params.kind,
@@ -543,7 +588,17 @@ async fn add_album_item(
     AxumPath(id): AxumPath<String>,
     Json(body): Json<AlbumItemLink>,
 ) -> Result<StatusCode, ApiError> {
+    let _ = fetch_item(&state, &body.item_id).await?;
     let db = state.db.clone();
+    let check_db = db.clone();
+    let check_id = id.clone();
+    let exists = tokio::task::spawn_blocking(move || check_db.get_album(&check_id))
+        .await
+        .map_err(ApiError::internal)??
+        .is_some();
+    if !exists {
+        return Err(ApiError::not_found("album not found"));
+    }
     let album_id = id.clone();
     let item_id = body.item_id;
     tokio::task::spawn_blocking(move || db.add_album_item(&album_id, &item_id))
@@ -556,6 +611,15 @@ async fn remove_album_item(
     State(state): State<AppState>,
     AxumPath((id, item_id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
+    let db = state.db.clone();
+    let check_id = id.clone();
+    let exists = tokio::task::spawn_blocking(move || db.get_album(&check_id))
+        .await
+        .map_err(ApiError::internal)??
+        .is_some();
+    if !exists {
+        return Err(ApiError::not_found("album not found"));
+    }
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || db.remove_album_item(&id, &item_id))
         .await
@@ -666,21 +730,31 @@ async fn upload(
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(ApiError::internal)?;
+        // A subdir may be an existing symlink pointing outside the library.
+        let root_canon = tokio::fs::canonicalize(&root)
+            .await
+            .map_err(ApiError::internal)?;
+        let parent_canon = tokio::fs::canonicalize(parent)
+            .await
+            .map_err(ApiError::internal)?;
+        if !parent_canon.starts_with(&root_canon) {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(ApiError::forbidden("upload path escapes library root"));
+        }
     }
 
     let staging = root.join(format!(".upload-staging-{}", uuid::Uuid::now_v7()));
-    tokio::fs::copy(&temp, &staging)
-        .await
-        .map_err(ApiError::internal)?;
-    let _ = tokio::fs::remove_file(&temp).await;
-    if target.exists() && params.overwrite.unwrap_or(false) {
-        tokio::fs::remove_file(&target)
-            .await
-            .map_err(ApiError::internal)?;
+    if let Err(error) = tokio::fs::copy(&temp, &staging).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(ApiError::internal(error));
     }
-    tokio::fs::rename(&staging, &target)
-        .await
-        .map_err(ApiError::internal)?;
+    let _ = tokio::fs::remove_file(&temp).await;
+    // rename() replaces an existing target atomically on Linux; never delete
+    // the old file before the new one is in place.
+    if let Err(error) = tokio::fs::rename(&staging, &target).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(ApiError::internal(error));
+    }
 
     let config = state.config.clone();
     let db = state.db.clone();
@@ -746,16 +820,6 @@ async fn delete_item(
         &trash_id[..8],
         filename.replace(['/', '\\'], "_")
     ));
-    let source_copy = source.clone();
-    let trash_copy = trash_path.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        std::fs::copy(&source_copy, &trash_copy)?;
-        std::fs::remove_file(&source_copy)?;
-        Ok(())
-    })
-    .await
-    .map_err(ApiError::internal)??;
-
     let deleted_at = util::mtime_to_utc(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -771,15 +835,37 @@ async fn delete_item(
         trash_path: trash_path.to_string_lossy().to_string(),
         deleted_at,
     };
+
+    // Record the trash entry before touching the file. If the move fails we
+    // remove the row again; if the process dies in between, the file is still
+    // intact at its original path and a later scan heals the item.
     let db = state.db.clone();
-    let item_id = item.id.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        db.add_trash(&entry)?;
-        db.set_missing(&item_id, true)?;
+    let entry_for_db = entry.clone();
+    tokio::task::spawn_blocking(move || db.add_trash(&entry_for_db))
+        .await
+        .map_err(ApiError::internal)??;
+
+    let source_copy = source.clone();
+    let trash_copy = trash_path.clone();
+    let moved = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        std::fs::copy(&source_copy, &trash_copy)?;
+        std::fs::remove_file(&source_copy)?;
         Ok(())
     })
-    .await
-    .map_err(ApiError::internal)??;
+    .await;
+
+    if let Err(error) = moved {
+        let db = state.db.clone();
+        let id = trash_id.clone();
+        let _ = tokio::task::spawn_blocking(move || db.delete_trash_row(&id)).await;
+        return Err(ApiError::internal(error));
+    }
+
+    let db = state.db.clone();
+    let item_id = item.id.clone();
+    tokio::task::spawn_blocking(move || db.set_missing(&item_id, true))
+        .await
+        .map_err(ApiError::internal)??;
 
     Ok(Json(json!({ "trash_id": trash_id })))
 }
@@ -792,6 +878,19 @@ async fn list_trash(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
     let entries = tokio::task::spawn_blocking(move || db.list_trash())
         .await
         .map_err(ApiError::internal)??;
+    let entries: Vec<Value> = entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "id": entry.id,
+                "item_id": entry.item_id,
+                "library_id": entry.library_id,
+                "rel_path": entry.rel_path,
+                "filename": entry.filename,
+                "deleted_at": entry.deleted_at,
+            })
+        })
+        .collect();
     Ok(Json(json!({ "entries": entries })))
 }
 
@@ -816,23 +915,36 @@ async fn restore_trash(
             .map_err(ApiError::internal)?;
     }
     let trash_path = PathBuf::from(&entry.trash_path);
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        std::fs::copy(&trash_path, &target)?;
-        std::fs::remove_file(&trash_path)?;
-        Ok(())
+    // Copy back first and keep the trash copy until the database transaction
+    // commits. If the DB update fails, remove the restored target and keep the
+    // trash entry intact so the operation can be retried.
+    tokio::task::spawn_blocking({
+        let trash_path = trash_path.clone();
+        let target = target.clone();
+        move || -> anyhow::Result<()> {
+            std::fs::copy(&trash_path, &target)?;
+            Ok(())
+        }
     })
     .await
     .map_err(ApiError::internal)??;
+
     let db = state.db.clone();
     let item_id = entry.item_id.clone();
     let trash_id = entry.id.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        db.set_missing(&item_id, false)?;
-        db.delete_trash_row(&trash_id)?;
-        Ok(())
-    })
-    .await
-    .map_err(ApiError::internal)??;
+    let finished =
+        tokio::task::spawn_blocking(move || db.complete_trash_restore(&item_id, &trash_id))
+            .await
+            .map_err(ApiError::internal)?;
+
+    if let Err(error) = finished {
+        let _ = tokio::fs::remove_file(&target).await;
+        return Err(ApiError::internal(error));
+    }
+
+    if let Err(error) = tokio::fs::remove_file(&trash_path).await {
+        tracing::warn!(path = %trash_path.display(), %error, "failed to remove restored trash copy");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1168,10 +1280,20 @@ async fn install_sidecar(source: PathBuf, destination: PathBuf) -> Result<(), Ap
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = destination.with_file_name(format!(".sidecar-tmp-{}.jpg", std::process::id()));
-        std::fs::copy(&source, &tmp)?;
-        std::fs::rename(&tmp, &destination)?;
-        Ok(())
+        let tmp = destination.with_file_name(format!(
+            ".sidecar-tmp-{}-{}.jpg",
+            std::process::id(),
+            uuid::Uuid::now_v7()
+        ));
+        let result = (|| -> anyhow::Result<()> {
+            std::fs::copy(&source, &tmp)?;
+            std::fs::rename(&tmp, &destination)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
     })
     .await
     .map_err(ApiError::internal)??;
@@ -1290,4 +1412,415 @@ pub fn start_scan(state: AppState, library_id: Option<String>) -> anyhow::Result
     });
 
     Ok(job_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Method, Request as HttpRequest, StatusCode};
+    use photoself_core::scan;
+    use photoself_core::{Config, Db};
+    use std::io::Write;
+    use tower::ServiceExt;
+
+    struct TestApp {
+        app: Router,
+        root: PathBuf,
+        config: Config,
+        db: Db,
+    }
+
+    impl Drop for TestApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn setup(name: &str, transcode: bool) -> TestApp {
+        let root =
+            std::env::temp_dir().join(format!("photoself-it-{}-{}", name, uuid::Uuid::now_v7()));
+        let photos = root.join("photos");
+        let data = root.join("data");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let config_path = root.join("config.toml");
+        let toml = format!(
+            r#"
+[server]
+listen = "127.0.0.1:0"
+
+[data]
+dir = "{data}"
+
+[[libraries]]
+id = "lib"
+name = "Test"
+path = "{photos}"
+read_only = false
+
+[write]
+enabled = true
+max_upload_bytes = 10485760
+
+[trash]
+enabled = true
+
+[thumbnails]
+sizes = [320]
+concurrency = 1
+
+[ffmpeg]
+enabled = {transcode}
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+
+[video]
+transcode_enabled = {transcode}
+transcode_concurrency = 1
+max_height = 240
+transcode_max_width = 320
+
+[auth]
+mode = "none"
+
+[scan]
+on_start = false
+interval = "0"
+hash = true
+probe_videos = true
+"#,
+            data = data.display(),
+            photos = photos.display(),
+        );
+        std::fs::write(&config_path, toml).unwrap();
+        let config = Config::load(&config_path).unwrap();
+        config.ensure_dirs().unwrap();
+        let db = Db::open(&config.db_path()).unwrap();
+        db.ensure_libraries(&config.libraries).unwrap();
+        let state = AppState::new(config.clone(), db.clone());
+        let app = router(state);
+        TestApp {
+            app,
+            root,
+            config,
+            db,
+        }
+    }
+
+    fn upload_request(name: &str, data: &[u8], csrf: bool) -> HttpRequest<Body> {
+        let boundary = "photoself-test-boundary";
+        let mut body = Vec::new();
+        write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"library\"\r\n\r\nlib\r\n"
+        )
+        .unwrap();
+        write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: image/jpeg\r\n\r\n"
+        )
+        .unwrap();
+        body.extend_from_slice(data);
+        write!(body, "\r\n--{boundary}--\r\n").unwrap();
+
+        let mut builder = HttpRequest::post("/api/v1/upload").header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+        if csrf {
+            builder = builder.header("x-requested-with", "photoSelf");
+        }
+        builder.body(Body::from(body)).unwrap()
+    }
+
+    fn json_request(method: Method, path: &str, body: Value, csrf: bool) -> HttpRequest<Body> {
+        let mut builder = HttpRequest::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if csrf {
+            builder = builder.header("x-requested-with", "photoSelf");
+        }
+        builder.body(Body::from(body.to_string())).unwrap()
+    }
+
+    async fn call(app: &Router, request: HttpRequest<Body>) -> (StatusCode, Vec<u8>) {
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, bytes)
+    }
+
+    async fn call_json(app: &Router, request: HttpRequest<Body>) -> (StatusCode, Value) {
+        let (status, bytes) = call(app, request).await;
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, body)
+    }
+
+    async fn upload(app: &Router, name: &str) -> String {
+        let (status, body) = call_json(app, upload_request(name, b"not-an-image", true)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn upload_delete_restore_and_csrf() {
+        let fixture = setup("upload", false);
+        let (status, _) = call(&fixture.app, upload_request("a.jpg", b"x", false)).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "write request without CSRF header"
+        );
+
+        let id = upload(&fixture.app, "a.jpg").await;
+        assert!(fixture.root.join("photos/a.jpg").is_file());
+
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(
+                Method::DELETE,
+                &format!("/api/v1/items/{id}"),
+                Value::Null,
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!fixture.root.join("photos/a.jpg").exists());
+
+        let (status, trash) = call_json(
+            &fixture.app,
+            HttpRequest::get("/api/v1/trash")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = trash["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].get("trash_path").is_none(),
+            "absolute path leaked"
+        );
+        let trash_id = entries[0]["id"].as_str().unwrap();
+
+        let (status, _) = call(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/trash/{trash_id}/restore"),
+                Value::Null,
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(fixture.root.join("photos/a.jpg").is_file());
+
+        let (_, trash) = call_json(
+            &fixture.app,
+            HttpRequest::get("/api/v1/trash")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(trash["entries"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tags_albums_and_validation() {
+        let fixture = setup("tags", false);
+        let id = upload(&fixture.app, "tag.jpg").await;
+
+        let (status, tag) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                "/api/v1/tags",
+                json!({"name": "travel"}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let tag_id = tag["id"].as_i64().unwrap();
+
+        let (status, item) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/items/{id}/tags"),
+                json!({"tag_id": tag_id}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(item["tags"].as_array().unwrap().len(), 1);
+
+        let (status, _) = call(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/items/{id}/tags"),
+                json!({"tag_id": 99999}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, album) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                "/api/v1/albums",
+                json!({"name": "Summer"}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let album_id = album["id"].as_str().unwrap();
+
+        let (status, _) = call(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/albums/{album_id}/items"),
+                json!({"item_id": id}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        let (status, items) = call_json(
+            &fixture.app,
+            HttpRequest::get(format!("/api/v1/albums/{album_id}/items"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(items["items"].as_array().unwrap().len(), 1);
+
+        let (status, _) = call(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/albums/{album_id}/items"),
+                json!({"item_id": "missing"}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _) = call(
+            &fixture.app,
+            HttpRequest::get("/api/v1/albums/missing/items")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn transcode_job_produces_play_url() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not installed; skipping transcode test");
+            return;
+        }
+        let fixture = setup("transcode", true);
+        let video = fixture.root.join("photos/clip.mp4");
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=160x120:rate=5",
+                "-t",
+                "1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(&video)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("ffmpeg could not create fixture; skipping transcode test");
+            return;
+        }
+        let library = fixture.config.libraries[0].to_library();
+        let item =
+            scan::scan_file(&fixture.config, &fixture.db, &library, &video, "clip.mp4").unwrap();
+
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                &format!("/api/v1/items/{}/transcode", item.id),
+                Value::Null,
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let job_id = body["job_id"].as_str().unwrap().to_string();
+
+        let mut completed = false;
+        for _ in 0..30 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let (status, job) = call_json(
+                &fixture.app,
+                HttpRequest::get(format!("/api/v1/jobs/{job_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            if job["state"] == "completed" {
+                completed = true;
+                break;
+            }
+            if job["state"] == "failed" {
+                panic!("transcode failed: {job}");
+            }
+        }
+        assert!(completed, "transcode did not complete");
+
+        let (status, item) = call_json(
+            &fixture.app,
+            HttpRequest::get(format!("/api/v1/items/{}", item.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let play_url = item["play_url"].as_str().unwrap();
+        let (status, bytes) = call(
+            &fixture.app,
+            HttpRequest::get(play_url).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!bytes.is_empty());
+    }
 }

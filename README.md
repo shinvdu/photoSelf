@@ -149,7 +149,7 @@ read_only = true
 - `server.listen` — bind address, e.g. `127.0.0.1:8787` behind a proxy or `0.0.0.0:8787` on a trusted LAN.
 - `data.dir` — SQLite, thumbnail cache and temporary files.
 - `media.serve_mode` — `standalone` (this server serves media) or `proxy` (Nginx/lighttpd serves `/media` and `/thumbs`).
-- `auth.mode` — `none`, `basic` (single user, Argon2id), or `proxy` (trust `X-Forwarded-User`).
+- `auth.mode` — `none`, `basic` (single user, Argon2id), or `proxy` (trust `X-Forwarded-User` only from `server.trusted_proxies` CIDRs).
 - `thumbnails.concurrency` — keep `1` on 512 MB devices.
 - `scan.hash` — content hashing enables rename detection and stable thumbnails; disable only for very slow storage.
 
@@ -200,6 +200,8 @@ concurrency = 1
 ## HTTP API (v0.2)
 
 Base path: `/api/v1`. Errors use `application/problem+json`.
+All `POST`/`PUT`/`PATCH`/`DELETE` requests must send
+`X-Requested-With: photoSelf` (CSRF guard).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -397,10 +399,10 @@ This is a **v0.2 MVP**, not a finished product:
   depends on the browser and on ffmpeg having a decoder/encoder.
 - Trash retention is manual: purge old entries yourself (no automatic sweep yet).
 - Reserved/not fully enforced yet: `scan.concurrency`, `missing_retention_days`,
-  `thumbnails.prewarm_on_scan`, `auth.session_ttl_hours`, `server.base_path`,
-  `server.ui_embedded` and `server.trusted_proxies`.
-- `auth.mode = "proxy"` trusts `X-Forwarded-User`; only use it behind a trusted proxy that
-  strips client-supplied headers.
+  `thumbnails.prewarm_on_scan`, `auth.session_ttl_hours`, `server.base_path`
+  and `server.ui_embedded`.
+- `auth.mode = "proxy"` trusts `X-Forwarded-User` only from peers listed in
+  `server.trusted_proxies`; only use it behind a trusted proxy that strips client-supplied headers.
 - EXIF dates without timezone are stored as naive local timestamps.
 - HEIC/RAW are indexed but thumbnails may fail unless ffmpeg supports them.
 - SQLite is compiled with `bundled`; cross builds need a C compiler (use zigbuild or the OpenWrt SDK).

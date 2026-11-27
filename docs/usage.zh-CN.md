@@ -75,8 +75,10 @@ ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
 ## 收藏与搜索
 
 ```bash
+# 所有 POST/PUT/PATCH/DELETE 都要带 X-Requested-With: photoSelf
 # 收藏
 curl -u admin:password -X PATCH \
+  -H 'X-Requested-With: photoSelf' \
   -H 'Content-Type: application/json' \
   -d '{"favorite":true}' \
   http://127.0.0.1:8787/api/v1/items/<id>
@@ -95,7 +97,7 @@ PASS='your-password'
 
 curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/info
 curl -u "admin:$PASS" 'http://127.0.0.1:8787/api/v1/items?limit=100'
-curl -u "admin:$PASS" -X POST http://127.0.0.1:8787/api/v1/scan
+curl -u "admin:$PASS" -H 'X-Requested-With: photoSelf' -X POST http://127.0.0.1:8787/api/v1/scan
 curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/jobs/<job-id>
 ```
 
@@ -182,7 +184,8 @@ password_hash = "$argon2id$..."
 mode = "proxy"
 ```
 
-代理必须完成认证并设置 `X-Forwarded-User`；绝不要直接信任来自公网的该请求头。
+代理必须完成认证并设置 `X-Forwarded-User`；只有 `server.trusted_proxies`
+（CIDR/裸 IP）中的网段可以发送该头，绝不要直接信任来自公网的请求。
 
 ## 数据、备份与恢复
 

@@ -238,6 +238,8 @@ password_hash = "$argon2id$..."
 
 Basic auth is single-user. Behind a trusted reverse proxy, use
 `auth.mode = "proxy"`; the proxy must authenticate and set `X-Forwarded-User`.
+The application only accepts that header from peers listed in
+`server.trusted_proxies` (CIDR or bare IP); the default is loopback only.
 
 
 ### Write mode, trash and video derivatives

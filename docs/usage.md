@@ -78,8 +78,10 @@ A scan job reports progress and counts:
 ## Favorites and search
 
 ```bash
+# All POST/PUT/PATCH/DELETE requests need X-Requested-With: photoSelf
 # favorite
 curl -u admin:password -X PATCH \
+  -H 'X-Requested-With: photoSelf' \
   -H 'Content-Type: application/json' \
   -d '{"favorite":true}' \
   http://127.0.0.1:8787/api/v1/items/<id>
@@ -98,7 +100,7 @@ PASS='your-password'
 
 curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/info
 curl -u "admin:$PASS" 'http://127.0.0.1:8787/api/v1/items?limit=100'
-curl -u "admin:$PASS" -X POST http://127.0.0.1:8787/api/v1/scan
+curl -u "admin:$PASS" -H 'X-Requested-With: photoSelf' -X POST http://127.0.0.1:8787/api/v1/scan
 curl -u "admin:$PASS" http://127.0.0.1:8787/api/v1/jobs/<job-id>
 ```
 
@@ -188,8 +190,9 @@ Behind a trusted reverse proxy:
 mode = "proxy"
 ```
 
-The proxy must authenticate and set `X-Forwarded-User`; never trust this header
-from the internet directly.
+The proxy must authenticate and set `X-Forwarded-User`. Only peers in
+`server.trusted_proxies` (CIDR/bare IP) may send it; never trust this header from
+the internet directly.
 
 ## Data, backup and restore
 
