@@ -42,7 +42,8 @@ mkdir -p "$PKG_ROOT/usr/bin" "$PKG_ROOT/etc/init.d" "$PKG_ROOT/etc/photoself" "$
 
 install -m 0755 "$BINARY" "$PKG_ROOT/usr/bin/photoself"
 install -m 0755 "$INIT" "$PKG_ROOT/etc/init.d/photoself"
-install -m 0600 "$CONFIG" "$PKG_ROOT/etc/photoself/config.toml"
+install -m 0644 "$CONFIG" "$PKG_ROOT/etc/photoself/config.toml.example"
+install -m 0755 "$ROOT_DIR/deploy/openwrt/postinst" "$CONTROL/postinst"
 
 SIZE=$(find "$PKG_ROOT" -type f -printf '%s\n' | awk '{sum += $1} END {print sum + 0}')
 
@@ -61,7 +62,6 @@ Installed-Size: $SIZE
 Description: Lightweight self-hosted photo and video gallery (Rust + Vue).
 EOF
 
-printf '%s\n' '/etc/photoself/config.toml' > "$CONTROL/conffiles"
 printf '2.0\n' > "$TMP/debian-binary"
 
 (cd "$PKG_ROOT" && tar --format=gnu --numeric-owner --owner=0 --group=0 \

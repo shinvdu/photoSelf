@@ -1,0 +1,8 @@
+#!/bin/sh
+# Create the initial config on first install only. Upgrades must never replace
+# an existing /etc/photoself/config.toml.
+if [ ! -f /etc/photoself/config.toml ] && [ -f /etc/photoself/config.toml.example ]; then
+	cp /etc/photoself/config.toml.example /etc/photoself/config.toml
+	chmod 600 /etc/photoself/config.toml
+fi
+exit 0

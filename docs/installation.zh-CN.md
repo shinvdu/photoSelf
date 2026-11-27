@@ -20,10 +20,12 @@ photoSelf 以单个 Rust 二进制运行，前端可选内嵌。它直接读取�
 | `photoself_<version>_x86_64.ipk` | OpenWrt x86_64 |
 | `photoself-<version>-openwrt-aarch64.tar.gz` | apk 版 OpenWrt / 手工安装 |
 | `photoself-<version>-openwrt-armv7.tar.gz` | apk 版 OpenWrt / 手工安装 |
+| `photoself-<version>-openwrt-x86_64.tar.gz` | OpenWrt x86_64 apk / 手工安装 |
 
-`.ipk` 会安装 `/usr/bin/photoself`、`/etc/init.d/photoself` 和
+`.ipk` 会安装 `/usr/bin/photoself`、`/etc/init.d/photoself`、
+`/etc/photoself/config.toml.example`，并在首次安装时创建
 `/etc/photoself/config.toml`。**启动前先编辑配置**（路径是占位符；默认
-`auth.mode = "none"`，仅适合可信局域网）。
+`auth.mode = "none"`，仅适合可信局域网）。升级会保留已有配置。
 
 ```sh
 opkg install photoself_<version>_aarch64_cortex-a53.ipk

@@ -21,10 +21,13 @@ existing folders; it does not import or move your photos.
 | `photoself_<version>_x86_64.ipk` | OpenWrt x86_64 |
 | `photoself-<version>-openwrt-aarch64.tar.gz` | OpenWrt apk-based systems / manual install |
 | `photoself-<version>-openwrt-armv7.tar.gz` | OpenWrt apk-based systems / manual install |
+| `photoself-<version>-openwrt-x86_64.tar.gz` | OpenWrt x86_64 apk-based / manual install |
 
-The `.ipk` installs `/usr/bin/photoself`, `/etc/init.d/photoself` and
+The `.ipk` installs `/usr/bin/photoself`, `/etc/init.d/photoself`,
+`/etc/photoself/config.toml.example` and, on first install, creates
 `/etc/photoself/config.toml`. **Edit the config before starting** (paths are
-placeholders; default auth is `none` for a trusted LAN).
+placeholders; default auth is `none` for a trusted LAN). Upgrades preserve an
+existing config.
 
 ```sh
 opkg install photoself_<version>_aarch64_cortex-a53.ipk

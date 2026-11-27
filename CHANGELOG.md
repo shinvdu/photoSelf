@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-11-27
+
+- OpenWrt package: ship `config.toml.example` and create `config.toml` only on
+  first install, so upgrades no longer overwrite a customized configuration.
+
 ## 0.2.0 — 2026-11-27
 
 - Tags: create/delete, attach/detach, tag filter on the timeline and API.
