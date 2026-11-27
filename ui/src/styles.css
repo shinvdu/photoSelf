@@ -1854,3 +1854,21 @@ body {
     flex-direction: column;
   }
 }
+
+/* ---- light-mode video play badge ---------------------------------- */
+
+.tile .play {
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  color: var(--accent);
+  box-shadow: 0 3px 10px rgba(60, 20, 40, 0.2);
+  backdrop-filter: blur(6px);
+  padding-left: 2px;
+}
+
+:root[data-theme='dark'] .tile .play {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(10, 6, 12, 0.62);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+}

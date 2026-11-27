@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const API = '/api/v1'
@@ -105,7 +105,6 @@ let pinchState = null
 let lastTap = { time: 0, x: 0, y: 0 }
 let suppressDblClickUntil = 0
 
-let observer = null
 let scanTimer = null
 let transcodeTimer = null
 
@@ -154,6 +153,7 @@ async function loadItems(reset = false) {
   if (!reset && !nextCursor.value) return
   loading.value = true
   error.value = ''
+  let succeeded = false
   try {
     const params = new URLSearchParams({ limit: '100' })
     if (query.value.trim()) params.set('q', query.value.trim())
@@ -164,11 +164,28 @@ async function loadItems(reset = false) {
     const data = await api(`${API}/items?${params.toString()}`)
     items.value = reset ? data.items : [...items.value, ...data.items]
     nextCursor.value = data.next_cursor
+    succeeded = true
   } catch (err) {
     error.value = err.message
   } finally {
     loading.value = false
+    if (succeeded) nextTick(checkLoadMore)
   }
+}
+
+// The old IntersectionObserver kept watching the sentinel element from the
+// previous render, so auto-loading stopped after switching views. A scroll
+// position check works regardless of when the sentinel is re-created.
+function checkLoadMore() {
+  if (view.value !== 'timeline' || selected.value || loading.value || !nextCursor.value) return
+  const element = sentinel.value
+  if (!element) return
+  const rect = element.getBoundingClientRect()
+  if (rect.top <= window.innerHeight + 500) loadItems(false)
+}
+
+function onWindowScroll() {
+  checkLoadMore()
 }
 
 async function loadAlbums() {
@@ -1335,32 +1352,21 @@ onMounted(async () => {
   window.addEventListener('scroll', closeContextMenu, true)
   await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
 
-  observer = new IntersectionObserver(
-    (entries) => {
-      if (
-        view.value === 'timeline' &&
-        entries[0]?.isIntersecting &&
-        nextCursor.value &&
-        !loading.value
-      ) {
-        loadItems(false)
-      }
-    },
-    { rootMargin: '600px' },
-  )
-  if (sentinel.value) observer.observe(sentinel.value)
-
+  window.addEventListener('scroll', onWindowScroll, { passive: true })
+  window.addEventListener('resize', onWindowScroll)
   window.addEventListener('keydown', onKey)
+  nextTick(checkLoadMore)
 })
 
 onUnmounted(() => {
-  observer?.disconnect()
   if (scanTimer) clearTimeout(scanTimer)
   if (transcodeTimer) clearTimeout(transcodeTimer)
   if (toastTimer) clearTimeout(toastTimer)
   for (const query of layoutQueries) query.removeEventListener('change', onLayoutChange)
   window.removeEventListener('click', closeContextMenu)
   window.removeEventListener('scroll', closeContextMenu, true)
+  window.removeEventListener('scroll', onWindowScroll)
+  window.removeEventListener('resize', onWindowScroll)
   window.removeEventListener('keydown', onKey)
   document.body.classList.remove('modal-open')
 })

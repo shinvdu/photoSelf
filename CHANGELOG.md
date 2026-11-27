@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3 — 2026-11-27
+
+- Light-mode video play badge restyled: white translucent disc with a pink
+  accent play icon (dark mode keeps a dark disc with a light border).
+- Fix infinite scrolling stopping after switching views: the old
+  `IntersectionObserver` kept watching a sentinel node from the previous
+  render. Replaced with scroll/resize position checks that run on view changes
+  and after each page; the manual **Load more** button remains as a fallback.
+- Auto-loading pauses while the lightbox is open.
+
 ## 0.7.2 — 2026-11-27
 
 - Albums: **New album** is now a button that opens a modal instead of an
