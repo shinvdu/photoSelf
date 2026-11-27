@@ -86,6 +86,15 @@ pub struct Library {
     pub ignore_globs: Vec<String>,
 }
 
+/// A library row loaded from SQLite, with the origin of the record.
+#[derive(Debug, Clone)]
+pub struct StoredLibrary {
+    pub library: Library,
+    /// `config` for entries imported from `[[libraries]]`, `ui` for entries
+    /// created from the web interface.
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ItemQuery {
     pub library_id: Option<String>,

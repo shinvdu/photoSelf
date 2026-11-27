@@ -73,7 +73,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     init_logging(&config);
 
     let db = Db::open(&config.db_path())?;
-    db.ensure_libraries(&config.libraries)?;
+    db.seed_config_libraries(&config.libraries)?;
 
     let state = state::AppState::new(config.clone(), db);
     spawn_scan_scheduler(state.clone());
@@ -83,6 +83,11 @@ async fn serve(config_path: PathBuf) -> Result<()> {
         }
     }
 
+    let library_count = state
+        .libraries_snapshot()
+        .iter()
+        .filter(|lib| lib.enabled)
+        .count();
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&config.server.listen)
         .await
@@ -92,7 +97,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
         listen = %config.server.listen,
         mode = %config.server.mode,
         auth = %config.auth.mode,
-        libraries = config.libraries.iter().filter(|lib| lib.enabled).count(),
+        libraries = library_count,
         "photoSelf starting"
     );
 
@@ -111,11 +116,12 @@ fn scan(config_path: PathBuf, library_filter: Option<String>) -> Result<()> {
     init_logging(&config);
 
     let db = Db::open(&config.db_path())?;
-    db.ensure_libraries(&config.libraries)?;
+    db.seed_config_libraries(&config.libraries)?;
 
-    let libraries: Vec<Library> = config
-        .libraries
-        .iter()
+    let libraries: Vec<Library> = db
+        .list_libraries()?
+        .into_iter()
+        .map(|row| row.library)
         .filter(|lib| lib.enabled)
         .filter(|lib| {
             library_filter
@@ -123,7 +129,6 @@ fn scan(config_path: PathBuf, library_filter: Option<String>) -> Result<()> {
                 .map(|id| id == &lib.id)
                 .unwrap_or(true)
         })
-        .map(|lib| lib.to_library())
         .collect();
 
     if libraries.is_empty() {

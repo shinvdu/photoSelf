@@ -29,6 +29,15 @@ read_only = true
 enabled = true
 ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
 
+[manage]
+# Allow adding, disabling and removing libraries from the web UI.
+# Disabled by default. Only paths under `allowed_roots` can be added; the
+# server-side directory picker is confined to the same list.
+enabled = false
+allowed_roots = ["/mnt/sda1", "/mnt/photos"]
+# Refuse management endpoints when auth.mode = "none".
+require_auth = true
+
 [media]
 # `standalone`: this server streams media and thumbnails.
 # `proxy`: a reverse proxy serves `/media` and `/thumbs` (recommended for low-power devices).

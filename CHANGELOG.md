@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 — 2026-11-27
+
+- Library management in the UI behind an optional `[manage]` section: list,
+  add (server-side directory picker or manual path), rename, enable/disable,
+  per-library scan and remove.
+- Libraries now live in SQLite. `config.toml` seeds new ids and upgrades
+  pre-0.5 rows once; removed libraries are tombstoned so a restart cannot
+  resurrect them. "Re-import from config" forces config values explicitly.
+- Path safety: absolute paths only, `manage.allowed_roots` allow-list, refusal
+  of `data.dir` / thumbnail / sidecar / trash trees, duplicate and nested
+  library rejection, and 5 s filesystem timeouts so stale mounts cannot wedge
+  the API. Management is refused with `auth.mode = "none"` unless
+  `require_auth = false` is set explicitly.
+- New endpoints: `GET/POST /api/v1/libraries`, `PATCH/DELETE
+  /api/v1/libraries/{id}`, `POST /api/v1/libraries/{id}/scan`,
+  `POST /api/v1/libraries/import-config`, `GET /api/v1/fs/dirs`.
+- `[[libraries]]` in config is no longer required to be non-empty; the DB is
+  authoritative after the first import.
+- Removing a library deletes its index, tags and album links only; source files
+  and pre-generated sidecars are never touched. Trash index rows for that
+  library are dropped, but trash files stay on disk.
+
 ## 0.4.0 — 2026-11-27
 
 - Lightbox zoom: mouse wheel, pinch, double-tap/double-click, on-screen

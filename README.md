@@ -63,6 +63,8 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - Multilingual UI (Simplified Chinese and English, Chinese by default)
 - Lightbox zoom/pan (wheel, pinch, double-tap, buttons) with original-resolution
   loading; portrait phones get a collapsible metadata sheet and swipe navigation
+- Optional UI library manager: add/disable/remove directories, trigger per-library
+  scans, and browse the server filesystem inside a configured allow-list
 - `none` / `basic` / `proxy` authentication
 - Standalone mode (Rust serves API, media and UI) or reverse-proxy mode
 - Embedded-UI release build (optional feature)
@@ -155,6 +157,26 @@ read_only = true
 - `auth.mode` — `none`, `basic` (single user, Argon2id), or `proxy` (trust `X-Forwarded-User` only from `server.trusted_proxies` CIDRs).
 - `thumbnails.concurrency` — keep `1` on 512 MB devices.
 - `scan.hash` — content hashing enables rename detection and stable thumbnails; disable only for very slow storage.
+
+### Managing libraries from the UI
+
+Libraries are imported from `[[libraries]]` on first start; after that the
+SQLite registry is authoritative. To add/remove directories from the web
+interface, enable the optional manager and give it an allow-list:
+
+```toml
+[manage]
+enabled = true
+allowed_roots = ["/mnt/sda1", "/mnt/photos"]
+require_auth = true
+```
+
+The UI can only add paths inside `allowed_roots`, and the directory picker
+cannot browse outside them. Removing a library deletes its index (and tag /
+album links) but never the source files. `config.toml` keeps seeding new ids;
+use **Re-import from config** in the UI to force config values over existing
+records. Management endpoints are refused when `auth.mode = "none"` and
+`require_auth = true`.
 
 ### Pre-generated previews (HEIC / HEVC on low-power devices)
 

@@ -55,6 +55,32 @@ Multiple libraries are allowed. Sidecars are scoped per library:
 
 This avoids collisions when two libraries contain a file with the same name.
 
+### Managing libraries from the UI (v0.5+)
+
+After the first import, libraries are stored in SQLite and can be added,
+disabled or removed from the **Libraries** tab. Enable the manager once:
+
+```toml
+[manage]
+enabled = true
+allowed_roots = ["/mnt/sda1", "/mnt/photos"]
+require_auth = true
+```
+
+- The UI can only add absolute paths inside `allowed_roots`; the built-in
+  directory picker cannot browse outside them.
+- The server rejects paths that overlap `data.dir`, the thumbnail cache,
+  sidecar/trash directories, or another library (nested libraries would index
+  files twice).
+- **Remove** deletes index rows, tags and album links. Source files and
+  pre-generated sidecars are never touched.
+- Disabling a library keeps its index but excludes it from scans and the
+  timeline.
+- `config.toml` is only used to seed new ids and to upgrade pre-v0.5 rows.
+  **Re-import from config** forcibly reapplies config values to matching ids.
+- With `auth.mode = "none"`, set `require_auth = false` explicitly if you
+  really want an unauthenticated LAN manager; the default refuses it.
+
 ## Scanning
 
 - **Manual:** press **Scan** in the UI or `POST /api/v1/scan`.

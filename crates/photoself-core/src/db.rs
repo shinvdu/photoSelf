@@ -9,7 +9,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::config::LibraryConfig;
-use crate::model::{Album, ItemQuery, MediaItem, MediaKind, Tag, TrashEntry};
+use crate::model::{Album, ItemQuery, Library, MediaItem, MediaKind, Tag, TrashEntry};
 use crate::util;
 
 const ITEM_COLUMNS: &str = "id, library_id, rel_path, content_hash, kind, size, mtime, \
@@ -151,6 +151,10 @@ impl Db {
                 name TEXT NOT NULL,
                 root_path TEXT NOT NULL,
                 read_only INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                ignore_globs TEXT NOT NULL DEFAULT '[]',
+                source TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -240,22 +244,105 @@ impl Db {
             );
             "#,
         )?;
+        Self::ensure_library_columns(&conn)?;
         Ok(())
     }
 
-    pub fn ensure_libraries(&self, libraries: &[LibraryConfig]) -> Result<()> {
+    /// Older databases predate UI-managed libraries. Add the columns in place
+    /// instead of asking the user to recreate the index.
+    fn ensure_library_columns(conn: &Connection) -> Result<()> {
+        let has_column = |name: &str| -> Result<bool> {
+            let mut stmt = conn.prepare("PRAGMA table_info(libraries)")?;
+            let mut rows = stmt.query([])?;
+            let mut found = false;
+            while let Some(row) = rows.next()? {
+                let column: String = row.get(1)?;
+                if column == name {
+                    found = true;
+                    break;
+                }
+            }
+            Ok(found)
+        };
+        if !has_column("enabled")? {
+            conn.execute(
+                "ALTER TABLE libraries ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+        }
+        if !has_column("ignore_globs")? {
+            conn.execute(
+                "ALTER TABLE libraries ADD COLUMN ignore_globs TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )?;
+        }
+        if !has_column("source")? {
+            conn.execute("ALTER TABLE libraries ADD COLUMN source TEXT", [])?;
+        }
+        if !has_column("deleted")? {
+            conn.execute(
+                "ALTER TABLE libraries ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Import `[[libraries]]` from config.toml.
+    ///
+    /// Rows created by the web UI (`source = 'ui'`) are never overwritten.
+    /// Legacy rows (source NULL) are upgraded from config once; afterwards the
+    /// database is authoritative and config edits do not fight the UI.
+    pub fn seed_config_libraries(&self, libraries: &[LibraryConfig]) -> Result<()> {
+        self.import_config_libraries_inner(libraries, false)
+    }
+
+    /// Explicit re-import requested from the UI: overwrite config-sourced
+    /// rows (including tombstones) with the current config.
+    pub fn import_config_libraries(&self, libraries: &[LibraryConfig]) -> Result<()> {
+        self.import_config_libraries_inner(libraries, true)
+    }
+
+    fn import_config_libraries_inner(
+        &self,
+        libraries: &[LibraryConfig],
+        force: bool,
+    ) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let now = now_str();
         for lib in libraries.iter().filter(|lib| lib.enabled) {
-            tx.execute(
-                "INSERT INTO libraries(id, name, root_path, read_only, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-                 ON CONFLICT(id) DO UPDATE SET
+            let ignore_globs =
+                serde_json::to_string(&lib.ignore_globs).unwrap_or_else(|_| "[]".to_string());
+            let conflict = if force {
+                "ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     root_path = excluded.root_path,
                     read_only = excluded.read_only,
-                    updated_at = excluded.updated_at",
+                    enabled = excluded.enabled,
+                    ignore_globs = excluded.ignore_globs,
+                    source = 'config',
+                    deleted = 0,
+                    updated_at = excluded.updated_at"
+            } else {
+                "ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    root_path = excluded.root_path,
+                    read_only = excluded.read_only,
+                    enabled = excluded.enabled,
+                    ignore_globs = excluded.ignore_globs,
+                    source = 'config',
+                    updated_at = excluded.updated_at
+                 WHERE source IS NULL"
+            };
+            let sql = format!(
+                "INSERT INTO libraries
+                    (id, name, root_path, read_only, enabled, ignore_globs, source, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5, 'config', ?6, ?6)
+                 {conflict}"
+            );
+            tx.execute(
+                &sql,
                 params![
                     lib.id,
                     if lib.name.is_empty() {
@@ -265,12 +352,137 @@ impl Db {
                     },
                     lib.path,
                     if lib.read_only { 1i64 } else { 0i64 },
+                    ignore_globs,
                     now
                 ],
             )?;
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn row_to_stored_library(row: &Row<'_>) -> rusqlite::Result<crate::model::StoredLibrary> {
+        let ignore_globs: String = row.get("ignore_globs")?;
+        let source: Option<String> = row.get("source")?;
+        Ok(crate::model::StoredLibrary {
+            library: Library {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                root_path: std::path::PathBuf::from(row.get::<_, String>("root_path")?),
+                read_only: row.get::<_, i64>("read_only")? != 0,
+                enabled: row.get::<_, i64>("enabled")? != 0,
+                ignore_globs: serde_json::from_str(&ignore_globs).unwrap_or_default(),
+            },
+            source: source.unwrap_or_else(|| "config".to_string()),
+        })
+    }
+
+    pub fn list_libraries(&self) -> Result<Vec<crate::model::StoredLibrary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, root_path, read_only, enabled, ignore_globs, source
+             FROM libraries WHERE deleted = 0 ORDER BY name, id",
+        )?;
+        let rows = stmt
+            .query_map([], Self::row_to_stored_library)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_library(&self, id: &str) -> Result<Option<crate::model::StoredLibrary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, root_path, read_only, enabled, ignore_globs, source
+             FROM libraries WHERE id = ?1 AND deleted = 0",
+        )?;
+        let library = stmt
+            .query_row(params![id], Self::row_to_stored_library)
+            .optional()?;
+        Ok(library)
+    }
+
+    pub fn insert_library(&self, library: &Library, source: &str) -> Result<()> {
+        let ignore_globs =
+            serde_json::to_string(&library.ignore_globs).unwrap_or_else(|_| "[]".to_string());
+        let conn = self.conn.lock().unwrap();
+        let now = now_str();
+        conn.execute(
+            "INSERT INTO libraries
+                (id, name, root_path, read_only, enabled, ignore_globs, source, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![
+                library.id,
+                library.name,
+                library.root_path.to_string_lossy(),
+                if library.read_only { 1i64 } else { 0i64 },
+                if library.enabled { 1i64 } else { 0i64 },
+                ignore_globs,
+                source,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_library(&self, library: &Library) -> Result<()> {
+        let ignore_globs =
+            serde_json::to_string(&library.ignore_globs).unwrap_or_else(|_| "[]".to_string());
+        let conn = self.conn.lock().unwrap();
+        let now = now_str();
+        conn.execute(
+            "UPDATE libraries SET
+                name = ?2, read_only = ?3, enabled = ?4, ignore_globs = ?5, updated_at = ?6
+             WHERE id = ?1",
+            params![
+                library.id,
+                library.name,
+                if library.read_only { 1i64 } else { 0i64 },
+                if library.enabled { 1i64 } else { 0i64 },
+                ignore_globs,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a library from the UI. The row is kept as a tombstone so a
+    /// `[[libraries]]` entry in config.toml cannot silently resurrect it on
+    /// the next restart. Items, tags and album links are removed; source files
+    /// and pre-generated sidecars are never touched. Returns the number of
+    /// indexed items that were removed.
+    pub fn delete_library(&self, id: &str) -> Result<i64> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let items: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM items WHERE library_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        // Trash rows have no foreign key; drop the index entries but leave the
+        // files in the trash directory for manual recovery.
+        tx.execute("DELETE FROM trash WHERE library_id = ?1", params![id])?;
+        tx.execute("DELETE FROM items WHERE library_id = ?1", params![id])?;
+        let now = now_str();
+        tx.execute(
+            "UPDATE libraries SET deleted = 1, enabled = 0, updated_at = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
+        tx.commit()?;
+        Ok(items)
+    }
+
+    pub fn library_item_counts(&self) -> Result<HashMap<String, i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT library_id, COUNT(*) FROM items GROUP BY library_id")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        Ok(rows)
     }
 
     pub fn find_by_path(&self, library_id: &str, rel_path: &str) -> Result<Option<MediaItem>> {
@@ -840,7 +1052,7 @@ mod tests {
     #[test]
     fn upsert_and_list() {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_libraries(&[LibraryConfig {
+        db.seed_config_libraries(&[LibraryConfig {
             id: "lib".into(),
             name: "Library".into(),
             path: "/tmp".into(),
@@ -858,7 +1070,7 @@ mod tests {
     #[test]
     fn tags_albums_and_trash() {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_libraries(&[LibraryConfig {
+        db.seed_config_libraries(&[LibraryConfig {
             id: "lib".into(),
             name: "Library".into(),
             path: "/tmp".into(),
@@ -915,5 +1127,85 @@ mod tests {
             db.get_derivative("a", "web").unwrap().as_deref(),
             Some("/tmp/a-web.mp4")
         );
+    }
+
+    #[test]
+    fn migrates_legacy_libraries_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE libraries (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                read_only INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO libraries VALUES ('old', 'Old', '/tmp', 1, '2026-01-01T00:00:00', '2026-01-01T00:00:00');",
+        )
+        .unwrap();
+        let db = Db {
+            conn: Arc::new(Mutex::new(conn)),
+        };
+        db.migrate().unwrap();
+        let rows = db.list_libraries().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "config");
+        assert!(rows[0].library.enabled);
+
+        db.seed_config_libraries(&[LibraryConfig {
+            id: "old".into(),
+            name: "New".into(),
+            path: "/mnt".into(),
+            ignore_globs: vec!["*.tmp".into()],
+            ..Default::default()
+        }])
+        .unwrap();
+        let rows = db.list_libraries().unwrap();
+        assert_eq!(rows[0].library.name, "New");
+        assert_eq!(rows[0].library.root_path, std::path::PathBuf::from("/mnt"));
+        assert_eq!(rows[0].library.ignore_globs, vec!["*.tmp".to_string()]);
+    }
+
+    #[test]
+    fn library_seed_respects_ui_edits_and_tombstones() {
+        let db = Db::open_in_memory().unwrap();
+        let config_lib = LibraryConfig {
+            id: "cfg".into(),
+            name: "Cfg".into(),
+            path: "/tmp".into(),
+            ignore_globs: vec![".thumb".into()],
+            ..Default::default()
+        };
+        db.seed_config_libraries(std::slice::from_ref(&config_lib))
+            .unwrap();
+        let rows = db.list_libraries().unwrap();
+        assert_eq!(rows[0].source, "config");
+        assert_eq!(rows[0].library.ignore_globs, vec![".thumb".to_string()]);
+
+        let mut edited = rows[0].library.clone();
+        edited.name = "Renamed".into();
+        edited.enabled = false;
+        edited.ignore_globs = vec!["*.tmp".into()];
+        db.update_library(&edited).unwrap();
+
+        db.seed_config_libraries(std::slice::from_ref(&config_lib))
+            .unwrap();
+        let rows = db.list_libraries().unwrap();
+        assert_eq!(rows[0].library.name, "Renamed");
+        assert!(!rows[0].library.enabled);
+        assert_eq!(rows[0].library.ignore_globs, vec!["*.tmp".to_string()]);
+
+        db.delete_library("cfg").unwrap();
+        db.seed_config_libraries(&[config_lib]).unwrap();
+        assert!(db.list_libraries().unwrap().is_empty());
+        db.import_config_libraries(&[LibraryConfig {
+            id: "cfg".into(),
+            name: "Cfg".into(),
+            path: "/tmp".into(),
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(db.list_libraries().unwrap().len(), 1);
     }
 }

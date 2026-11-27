@@ -19,6 +19,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub data: DataConfig,
     pub libraries: Vec<LibraryConfig>,
+    pub manage: ManageConfig,
     pub media: MediaConfig,
     pub thumbnails: ThumbConfig,
     pub ffmpeg: FfmpegConfig,
@@ -100,6 +101,30 @@ pub struct MediaConfig {
     pub serve_mode: String,
     pub public_media_path: String,
     pub public_thumb_path: String,
+}
+
+/// Runtime library management from the web UI.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ManageConfig {
+    /// Master switch. Disabled by default so upgrades never expose a path
+    /// picker unexpectedly.
+    pub enabled: bool,
+    /// Absolute directories that may be added as libraries from the UI.
+    /// An empty list means "nothing can be added from the UI".
+    pub allowed_roots: Vec<String>,
+    /// Refuse management endpoints when `auth.mode = "none"`.
+    pub require_auth: bool,
+}
+
+impl Default for ManageConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_roots: Vec::new(),
+            require_auth: true,
+        }
+    }
 }
 
 impl Default for MediaConfig {
@@ -309,13 +334,11 @@ impl Config {
             bail!("auth.mode = basic requires auth.username and auth.password_hash");
         }
 
-        let enabled: Vec<&LibraryConfig> =
-            self.libraries.iter().filter(|lib| lib.enabled).collect();
-        if enabled.is_empty() {
-            bail!("at least one enabled [[libraries]] entry is required");
-        }
+        // Libraries seeded from config are optional now: after the first
+        // import the UI-managed SQLite registry is authoritative, and a user
+        // may legitimately keep every library in the database only.
         let mut ids = std::collections::HashSet::new();
-        for lib in enabled {
+        for lib in self.libraries.iter().filter(|lib| lib.enabled) {
             if lib.id.trim().is_empty() {
                 bail!("library id must not be empty");
             }
@@ -324,6 +347,12 @@ impl Config {
             }
             if lib.path.trim().is_empty() {
                 bail!("library '{}' has an empty path", lib.id);
+            }
+        }
+
+        for root in &self.manage.allowed_roots {
+            if !root.trim().starts_with('/') {
+                bail!("manage.allowed_roots entries must be absolute paths");
             }
         }
 

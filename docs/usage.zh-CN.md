@@ -54,6 +54,28 @@ ignore_globs = ["._*", ".DS_Store", "@eaDir", "#recycle"]
 
 避免两个库里有同名文件时互相串图。
 
+### 在界面管理媒体库（v0.5+）
+
+首次导入后，媒体库以 SQLite 为准，可以在界面的「媒体库」页添加、停用或移除。
+先在配置里开启一次：
+
+```toml
+[manage]
+enabled = true
+allowed_roots = ["/mnt/sda1", "/mnt/photos"]
+require_auth = true
+```
+
+- 界面只能添加 `allowed_roots` 内的绝对路径；内置目录选择器也不会越过白名单。
+- 服务端会拒绝与 `data.dir`、缩略图缓存、sidecar/回收站目录或已有媒体库重叠的路径
+  （嵌套目录会被重复索引）。
+- **移除**只删除索引、标签和相册关联，原文件和预生成 sidecar 不会被删除。
+- 停用会保留索引，但不再参与扫描和时间线。
+- `config.toml` 只用于补充新 id 和升级 v0.5 之前的旧记录；「从配置重新导入」
+  会用配置强制覆盖同 id 记录。
+- `auth.mode = "none"` 时默认拒绝管理接口；确实需要无认证局域网管理时，
+  显式设置 `require_auth = false`。
+
 ## 扫描
 
 - **手动**：UI 点击 **Scan**，或 `POST /api/v1/scan`。

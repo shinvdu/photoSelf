@@ -1,16 +1,20 @@
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use photoself_core::model::{ItemQuery, Library, MediaItem, MediaKind, ScanStats, TrashEntry};
+use photoself_core::model::{
+    ItemQuery, Library, MediaItem, MediaKind, ScanStats, StoredLibrary, TrashEntry,
+};
 use photoself_core::{scan, thumb, util, video};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -60,6 +64,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/trash/{id}/restore", post(restore_trash))
         .route("/api/v1/trash/{id}", delete(purge_trash))
         .route("/api/v1/scan", post(scan_handler))
+        .route(
+            "/api/v1/libraries",
+            get(list_libraries).post(create_library),
+        )
+        .route(
+            "/api/v1/libraries/{id}",
+            patch(update_library).delete(delete_library),
+        )
+        .route("/api/v1/libraries/{id}/scan", post(scan_library))
+        .route(
+            "/api/v1/libraries/import-config",
+            post(import_config_libraries),
+        )
+        .route("/api/v1/fs/dirs", get(browse_dirs))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/jobs/{id}", get(get_job))
         .layer(middleware::from_fn(csrf_guard))
@@ -172,18 +190,20 @@ async fn info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
         .map_err(ApiError::internal)??;
 
     let libraries: Vec<Value> = state
-        .config
-        .libraries
-        .iter()
+        .libraries_snapshot()
+        .into_iter()
         .filter(|library| library.enabled)
         .map(|library| {
             json!({
                 "id": library.id,
-                "name": if library.name.is_empty() { &library.id } else { &library.name },
+                "name": library.name,
                 "read_only": library.read_only,
             })
         })
         .collect();
+
+    let manage_available = state.config.manage.enabled
+        && (!state.config.manage.require_auth || state.config.auth.mode != "none");
 
     Ok(Json(json!({
         "name": "photoSelf",
@@ -195,6 +215,7 @@ async fn info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
         "write_enabled": state.config.write.enabled,
         "trash_enabled": state.config.trash.enabled,
         "transcode_enabled": state.config.video.transcode_enabled,
+        "manage_enabled": manage_available,
         "libraries": libraries,
     })))
 }
@@ -342,6 +363,426 @@ async fn get_media(
     serve_file(path, headers).await
 }
 
+fn manage_allowed(state: &AppState) -> Result<(), ApiError> {
+    if !state.config.manage.enabled {
+        return Err(ApiError::forbidden("library management is disabled"));
+    }
+    if state.config.manage.require_auth && state.config.auth.mode == "none" {
+        return Err(ApiError::forbidden(
+            "library management requires authentication",
+        ));
+    }
+    Ok(())
+}
+
+fn protected_dirs(config: &photoself_core::Config) -> Vec<PathBuf> {
+    let mut protected = Vec::new();
+    for dir in [config.data_dir(), config.thumb_dir(), config.trash_dir()] {
+        if let Ok(path) = std::fs::canonicalize(&dir) {
+            protected.push(path);
+        }
+    }
+    if let Some(sidecar) = config.thumbnails.sidecar_dir.as_ref() {
+        if let Ok(path) = std::fs::canonicalize(sidecar) {
+            protected.push(path);
+        }
+    }
+    protected
+}
+
+fn library_json(row: &StoredLibrary, counts: &HashMap<String, i64>) -> Value {
+    json!({
+        "id": row.library.id,
+        "name": row.library.name,
+        "path": row.library.root_path.to_string_lossy(),
+        "read_only": row.library.read_only,
+        "enabled": row.library.enabled,
+        "ignore_globs": row.library.ignore_globs,
+        "source": row.source,
+        "item_count": counts.get(&row.library.id).copied().unwrap_or(0),
+    })
+}
+
+async fn list_libraries(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    let db = state.db.clone();
+    let (rows, counts) = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Vec<StoredLibrary>, HashMap<String, i64>)> {
+            Ok((db.list_libraries()?, db.library_item_counts()?))
+        },
+    )
+    .await
+    .map_err(ApiError::internal)??;
+    let libraries: Vec<Value> = rows.iter().map(|row| library_json(row, &counts)).collect();
+    Ok(Json(json!({ "libraries": libraries })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateLibraryRequest {
+    name: Option<String>,
+    path: String,
+    read_only: Option<bool>,
+    ignore_globs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateLibraryRequest {
+    name: Option<String>,
+    read_only: Option<bool>,
+    enabled: Option<bool>,
+    ignore_globs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DirsQuery {
+    path: Option<String>,
+}
+
+fn clean_ignore_globs(globs: Option<Vec<String>>) -> Result<Vec<String>, ApiError> {
+    let list =
+        globs.unwrap_or_else(|| photoself_core::config::LibraryConfig::default().ignore_globs);
+    if list.len() > 50 {
+        return Err(ApiError::bad_request("too many ignore globs"));
+    }
+    let mut cleaned = Vec::new();
+    for glob in list {
+        let glob = glob.trim();
+        if glob.is_empty() {
+            continue;
+        }
+        if glob.chars().count() > 200 {
+            return Err(ApiError::bad_request("ignore glob is too long"));
+        }
+        cleaned.push(glob.to_string());
+    }
+    Ok(cleaned)
+}
+
+fn clean_library_name(name: Option<&str>, path: &Path, id: &str) -> Result<String, ApiError> {
+    let candidate = name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            path.file_name()
+                .map(|component| component.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| id.to_string());
+    if candidate.chars().count() > 100 {
+        return Err(ApiError::bad_request("library name is too long"));
+    }
+    Ok(candidate)
+}
+
+/// Resolve and validate a path before adding it as a library. All filesystem
+/// work happens on the blocking pool with a timeout so a stale network mount
+/// cannot wedge the API.
+async fn validate_library_path(state: &AppState, raw: &str) -> Result<PathBuf, ApiError> {
+    let raw = raw.trim().to_string();
+    if raw.is_empty() {
+        return Err(ApiError::bad_request("path is required"));
+    }
+    if !Path::new(&raw).is_absolute() {
+        return Err(ApiError::bad_request("path must be absolute"));
+    }
+    let roots = state.manage_roots.clone();
+    let libraries = state.libraries_snapshot();
+    let protected = protected_dirs(&state.config);
+    let task = tokio::task::spawn_blocking(move || -> anyhow::Result<PathBuf> {
+        let path =
+            std::fs::canonicalize(&raw).with_context(|| format!("cannot resolve path {raw}"))?;
+        let metadata =
+            std::fs::metadata(&path).with_context(|| format!("cannot stat {}", path.display()))?;
+        if !metadata.is_dir() {
+            anyhow::bail!("path is not a directory");
+        }
+        if roots.is_empty() {
+            anyhow::bail!("no manage.allowed_roots configured");
+        }
+        if !roots.iter().any(|root| path.starts_with(root)) {
+            anyhow::bail!("path is outside manage.allowed_roots");
+        }
+        for protected_dir in &protected {
+            if path == *protected_dir || path.starts_with(protected_dir) {
+                anyhow::bail!("path overlaps photoSelf data directories");
+            }
+        }
+        for library in &libraries {
+            if let Ok(existing) = std::fs::canonicalize(&library.root_path) {
+                if path == existing {
+                    anyhow::bail!("path already belongs to library '{}'", library.id);
+                }
+                if path.starts_with(&existing) || existing.starts_with(&path) {
+                    anyhow::bail!("path overlaps library '{}'", library.id);
+                }
+            }
+        }
+        std::fs::read_dir(&path).with_context(|| format!("{} is not readable", path.display()))?;
+        Ok(path)
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
+        Err(_) => Err(ApiError::bad_request("path check timed out")),
+        Ok(joined) => joined
+            .map_err(ApiError::internal)?
+            .map_err(|error| ApiError::bad_request(error.to_string())),
+    }
+}
+
+async fn create_library(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateLibraryRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    manage_allowed(&state)?;
+    let path = validate_library_path(&state, &payload.path).await?;
+    let id = format!("lib-{}", &uuid::Uuid::now_v7().simple().to_string()[..12]);
+    let name = clean_library_name(payload.name.as_deref(), &path, &id)?;
+    let library = Library {
+        id: id.clone(),
+        name,
+        root_path: path,
+        read_only: payload.read_only.unwrap_or(true),
+        enabled: true,
+        ignore_globs: clean_ignore_globs(payload.ignore_globs)?,
+    };
+    let db = state.db.clone();
+    let insert = library.clone();
+    tokio::task::spawn_blocking(move || db.insert_library(&insert, "ui"))
+        .await
+        .map_err(ApiError::internal)??;
+    state.reload_libraries();
+    let scan_job = start_scan(state.clone(), Some(id)).ok();
+    let row = StoredLibrary {
+        library,
+        source: "ui".to_string(),
+    };
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "library": library_json(&row, &HashMap::new()),
+            "scan_job": scan_job,
+        })),
+    ))
+}
+
+async fn update_library(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(payload): Json<UpdateLibraryRequest>,
+) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    let mut library = state
+        .library(&id)
+        .ok_or_else(|| ApiError::not_found("library not found"))?;
+    if let Some(name) = payload.name {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(ApiError::bad_request("library name must not be empty"));
+        }
+        if trimmed.chars().count() > 100 {
+            return Err(ApiError::bad_request("library name is too long"));
+        }
+        library.name = trimmed.to_string();
+    }
+    if let Some(read_only) = payload.read_only {
+        library.read_only = read_only;
+    }
+    if let Some(enabled) = payload.enabled {
+        library.enabled = enabled;
+    }
+    if payload.ignore_globs.is_some() {
+        library.ignore_globs = clean_ignore_globs(payload.ignore_globs)?;
+    }
+    let db = state.db.clone();
+    let updated = library.clone();
+    tokio::task::spawn_blocking(move || db.update_library(&updated))
+        .await
+        .map_err(ApiError::internal)??;
+    state.reload_libraries();
+    let db = state.db.clone();
+    let id = id.clone();
+    let (row, counts) = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Option<StoredLibrary>, HashMap<String, i64>)> {
+            Ok((db.get_library(&id)?, db.library_item_counts()?))
+        },
+    )
+    .await
+    .map_err(ApiError::internal)??;
+    let row = row.ok_or_else(|| ApiError::not_found("library not found"))?;
+    Ok(Json(library_json(&row, &counts)))
+}
+
+async fn delete_library(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    if state.scanning.load(Ordering::SeqCst) {
+        return Err(ApiError::conflict(
+            "a scan is running; try again after it finishes",
+        ));
+    }
+    state
+        .library(&id)
+        .ok_or_else(|| ApiError::not_found("library not found"))?;
+    let db = state.db.clone();
+    let id = id.clone();
+    let removed = tokio::task::spawn_blocking(move || db.delete_library(&id))
+        .await
+        .map_err(ApiError::internal)??;
+    state.reload_libraries();
+    Ok(Json(json!({ "removed": true, "removed_items": removed })))
+}
+
+async fn scan_library(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    state
+        .library(&id)
+        .ok_or_else(|| ApiError::not_found("library not found"))?;
+    let job = start_scan(state, Some(id)).map_err(|error| {
+        let message = error.to_string();
+        if message.contains("already running") {
+            ApiError::conflict(message)
+        } else {
+            ApiError::internal(error)
+        }
+    })?;
+    Ok(Json(json!({ "job_id": job })))
+}
+
+async fn import_config_libraries(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    let libraries = state.config.libraries.clone();
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || db.import_config_libraries(&libraries))
+        .await
+        .map_err(ApiError::internal)??;
+    state.reload_libraries();
+    Ok(Json(json!({
+        "imported": state.libraries_snapshot().len(),
+    })))
+}
+
+async fn browse_dirs(
+    State(state): State<AppState>,
+    Query(query): Query<DirsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    manage_allowed(&state)?;
+    let roots = state.manage_roots.clone();
+    if roots.is_empty() {
+        return Err(ApiError::bad_request("no manage.allowed_roots configured"));
+    }
+    let raw = query.path.unwrap_or_default();
+    if raw.trim().is_empty() {
+        let entries: Vec<Value> = roots
+            .iter()
+            .map(|root| {
+                json!({
+                    "name": root
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_else(|| root.to_string_lossy().to_string()),
+                    "path": root.to_string_lossy(),
+                })
+            })
+            .collect();
+        return Ok(Json(json!({
+            "path": Value::Null,
+            "parent": Value::Null,
+            "entries": entries,
+        })));
+    }
+
+    let roots_for_base = roots.clone();
+    let raw_for_base = raw.clone();
+    let base = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || -> anyhow::Result<PathBuf> {
+            let path = std::fs::canonicalize(&raw_for_base)?;
+            if !roots_for_base.iter().any(|root| path.starts_with(root)) {
+                anyhow::bail!("path is outside manage.allowed_roots");
+            }
+            if !path.is_dir() {
+                anyhow::bail!("path is not a directory");
+            }
+            Ok(path)
+        }),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("directory listing timed out"))?
+    .map_err(ApiError::internal)?
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+    let roots_for_entries = roots.clone();
+    let protected_for_entries = protected_dirs(&state.config);
+    let base_for_entries = base.clone();
+    let entries = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Value>> {
+            let mut entries = Vec::new();
+            for entry in std::fs::read_dir(&base_for_entries)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let canonical = match std::fs::canonicalize(entry.path()) {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                };
+                if !roots_for_entries
+                    .iter()
+                    .any(|root| canonical.starts_with(root))
+                {
+                    continue;
+                }
+                if protected_for_entries
+                    .iter()
+                    .any(|dir| canonical == *dir || canonical.starts_with(dir))
+                {
+                    continue;
+                }
+                match std::fs::metadata(&canonical) {
+                    Ok(metadata) if metadata.is_dir() => {}
+                    _ => continue,
+                }
+                entries.push(json!({
+                    "name": name,
+                    "path": canonical.to_string_lossy(),
+                }));
+            }
+            entries.sort_by(|left, right| {
+                left["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .cmp(&right["name"].as_str().unwrap_or_default().to_lowercase())
+            });
+            Ok(entries)
+        }),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("directory listing timed out"))?
+    .map_err(ApiError::internal)?
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+    let parent = if roots.iter().any(|root| root == &base) {
+        Value::Null
+    } else {
+        base.parent()
+            .filter(|parent| roots.iter().any(|root| parent.starts_with(root)))
+            .map(|parent| Value::String(parent.to_string_lossy().to_string()))
+            .unwrap_or(Value::Null)
+    };
+    Ok(Json(json!({
+        "path": base.to_string_lossy(),
+        "parent": parent,
+        "entries": entries,
+    })))
+}
+
 fn write_allowed(state: &AppState) -> Result<(), ApiError> {
     if !state.config.write.enabled {
         return Err(ApiError::forbidden("write mode is disabled"));
@@ -349,23 +790,16 @@ fn write_allowed(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn library_config(
-    state: &AppState,
-    id: &str,
-) -> Result<photoself_core::config::LibraryConfig, ApiError> {
+fn library_config(state: &AppState, id: &str) -> Result<photoself_core::model::Library, ApiError> {
     state
-        .config
-        .libraries
-        .iter()
-        .find(|library| library.id == id)
-        .cloned()
+        .library(id)
         .ok_or_else(|| ApiError::not_found("library not found"))
 }
 
 fn writable_library(
     state: &AppState,
     id: &str,
-) -> Result<photoself_core::config::LibraryConfig, ApiError> {
+) -> Result<photoself_core::model::Library, ApiError> {
     write_allowed(state)?;
     let library = library_config(state, id)?;
     if library.read_only {
@@ -720,7 +1154,7 @@ async fn upload(
         return Err(ApiError::bad_request("unsupported media extension"));
     }
 
-    let root = PathBuf::from(&library.path);
+    let root = library.root_path.clone();
     let target = root.join(&rel_path);
     if target.exists() && !params.overwrite.unwrap_or(false) {
         let _ = tokio::fs::remove_file(&temp).await;
@@ -760,7 +1194,7 @@ async fn upload(
     let db = state.db.clone();
     let scan_path = target.clone();
     let scan_rel = rel_path.clone();
-    let lib = library.to_library();
+    let lib = library;
     let item = tokio::task::spawn_blocking(move || {
         scan::scan_file(&config, &db, &lib, &scan_path, &scan_rel)
     })
@@ -905,7 +1339,7 @@ async fn restore_trash(
         .map_err(ApiError::internal)??
         .ok_or_else(|| ApiError::not_found("trash entry not found"))?;
     let library = library_config(&state, &entry.library_id)?;
-    let target = PathBuf::from(&library.path).join(&entry.rel_path);
+    let target = library.root_path.join(&entry.rel_path);
     if target.exists() {
         return Err(ApiError::conflict("target path already exists"));
     }
@@ -1108,13 +1542,11 @@ async fn fetch_item(state: &AppState, id: &str) -> Result<MediaItem, ApiError> {
 
 fn media_path(state: &AppState, item: &MediaItem) -> Result<PathBuf, ApiError> {
     let library = state
-        .config
-        .libraries
-        .iter()
-        .find(|library| library.id == item.library_id)
+        .library(&item.library_id)
         .ok_or_else(|| ApiError::not_found("library not found"))?;
 
-    let root = PathBuf::from(&library.path)
+    let root = library
+        .root_path
         .canonicalize()
         .map_err(|_| ApiError::not_found("library root not found"))?;
     let candidate = root.join(&item.rel_path);
@@ -1329,14 +1761,14 @@ pub fn start_scan(state: AppState, library_id: Option<String>) -> anyhow::Result
     let db = state.db.clone();
     let scanning = state.scanning.clone();
     let job = job_id.clone();
+    let library_snapshot = state.libraries_snapshot();
 
     tokio::spawn(async move {
         let scan_db = db.clone();
         let scan_job = job.clone();
         let result = tokio::task::spawn_blocking(move || -> anyhow::Result<ScanStats> {
-            let libraries: Vec<Library> = config
-                .libraries
-                .iter()
+            let libraries: Vec<Library> = library_snapshot
+                .into_iter()
                 .filter(|library| library.enabled)
                 .filter(|library| {
                     library_id
@@ -1344,7 +1776,6 @@ pub fn start_scan(state: AppState, library_id: Option<String>) -> anyhow::Result
                         .map(|id| id == &library.id)
                         .unwrap_or(true)
                 })
-                .map(|library| library.to_library())
                 .collect();
 
             if libraries.is_empty() {
@@ -1484,6 +1915,11 @@ transcode_max_width = 320
 [auth]
 mode = "none"
 
+[manage]
+enabled = true
+require_auth = false
+allowed_roots = ["{root}"]
+
 [scan]
 on_start = false
 interval = "0"
@@ -1492,12 +1928,13 @@ probe_videos = true
 "#,
             data = data.display(),
             photos = photos.display(),
+            root = root.display(),
         );
         std::fs::write(&config_path, toml).unwrap();
         let config = Config::load(&config_path).unwrap();
         config.ensure_dirs().unwrap();
         let db = Db::open(&config.db_path()).unwrap();
-        db.ensure_libraries(&config.libraries).unwrap();
+        db.seed_config_libraries(&config.libraries).unwrap();
         let state = AppState::new(config.clone(), db.clone());
         let app = router(state);
         TestApp {
@@ -1822,5 +2259,140 @@ probe_videos = true
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(!bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manage_libraries_add_validate_delete_and_import() {
+        let fixture = setup("manage", false);
+        let photos2 = fixture.root.join("photos2");
+        std::fs::create_dir_all(&photos2).unwrap();
+
+        let (status, body) = call_json(
+            &fixture.app,
+            HttpRequest::get("/api/v1/libraries")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["libraries"].as_array().unwrap().len(), 1);
+        assert_eq!(body["libraries"][0]["source"], "config");
+
+        let payload = json!({
+            "path": photos2.to_string_lossy(),
+            "name": "Second",
+            "read_only": true,
+        });
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(Method::POST, "/api/v1/libraries", payload.clone(), true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let id = body["library"]["id"].as_str().unwrap().to_string();
+        assert_eq!(body["library"]["source"], "ui");
+        assert_eq!(body["library"]["read_only"], true);
+        // The add triggers a background scan; let it finish before mutating.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let (status, _) = call_json(
+            &fixture.app,
+            json_request(Method::POST, "/api/v1/libraries", payload, true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                "/api/v1/libraries",
+                json!({"path": "/tmp"}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                "/api/v1/libraries",
+                json!({"path": photos2.to_string_lossy()}),
+                false,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, body) = call_json(
+            &fixture.app,
+            HttpRequest::get(format!("/api/v1/fs/dirs?path={}", fixture.root.display()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "photos2"));
+
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(
+                Method::PATCH,
+                &format!("/api/v1/libraries/{id}"),
+                json!({"enabled": false}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["enabled"], false);
+
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(
+                Method::DELETE,
+                &format!("/api/v1/libraries/{id}"),
+                json!({}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["removed"], true);
+
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(Method::DELETE, "/api/v1/libraries/lib", json!({}), true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // Config seeding must not resurrect a library removed from the UI.
+        fixture
+            .db
+            .seed_config_libraries(&fixture.config.libraries)
+            .unwrap();
+        assert!(fixture.db.list_libraries().unwrap().is_empty());
+
+        // Explicit re-import brings it back.
+        let (status, body) = call_json(
+            &fixture.app,
+            json_request(
+                Method::POST,
+                "/api/v1/libraries/import-config",
+                json!({}),
+                true,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["imported"], 1);
+        assert_eq!(fixture.db.list_libraries().unwrap().len(), 1);
     }
 }
