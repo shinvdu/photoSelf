@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 — 2026-11-27
+
+- Album actions in the lightbox now show a toast for success and failures;
+  previously the confirmation was written to the status bar, which is hidden
+  behind the lightbox overlay.
+- Fix: removing a non-cover album item no longer re-picks the album cover. The
+  cover is only recomputed when the cover item itself is removed.
+
 ## 0.5.0 — 2026-11-27
 
 - Library management in the UI behind an optional `[manage]` section: list,

@@ -918,11 +918,13 @@ impl Db {
             "DELETE FROM album_items WHERE album_id = ?1 AND item_id = ?2",
             params![album_id, item_id],
         )?;
+        // Only recompute the cover if the removed item was the cover; removing
+        // any other member must not shuffle the album's cover.
         conn.execute(
             "UPDATE albums SET cover_item_id = (
                 SELECT item_id FROM album_items WHERE album_id = ?1 LIMIT 1
-             ), updated_at = ?2 WHERE id = ?1",
-            params![album_id, now_str()],
+             ), updated_at = ?2 WHERE id = ?1 AND cover_item_id = ?3",
+            params![album_id, now_str(), item_id],
         )?;
         Ok(())
     }
@@ -1127,6 +1129,47 @@ mod tests {
             db.get_derivative("a", "web").unwrap().as_deref(),
             Some("/tmp/a-web.mp4")
         );
+    }
+
+    #[test]
+    fn album_cover_stays_when_removing_non_cover() {
+        let db = Db::open_in_memory().unwrap();
+        db.seed_config_libraries(&[LibraryConfig {
+            id: "lib".into(),
+            name: "Library".into(),
+            path: "/tmp".into(),
+            ..Default::default()
+        }])
+        .unwrap();
+        db.upsert_item(&sample_item("a", "a.jpg")).unwrap();
+        db.upsert_item(&sample_item("b", "b.jpg")).unwrap();
+        db.upsert_item(&sample_item("c", "c.jpg")).unwrap();
+        let album = db.create_album("Album", None).unwrap();
+        db.add_album_item(&album.id, "a").unwrap();
+        db.add_album_item(&album.id, "b").unwrap();
+        db.add_album_item(&album.id, "c").unwrap();
+        assert_eq!(
+            db.get_album(&album.id)
+                .unwrap()
+                .unwrap()
+                .cover_item_id
+                .as_deref(),
+            Some("a")
+        );
+
+        db.remove_album_item(&album.id, "c").unwrap();
+        assert_eq!(
+            db.get_album(&album.id)
+                .unwrap()
+                .unwrap()
+                .cover_item_id
+                .as_deref(),
+            Some("a")
+        );
+
+        db.remove_album_item(&album.id, "a").unwrap();
+        let cover = db.get_album(&album.id).unwrap().unwrap().cover_item_id;
+        assert_eq!(cover.as_deref(), Some("b"));
     }
 
     #[test]

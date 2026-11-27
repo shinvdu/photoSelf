@@ -77,6 +77,7 @@ export default {
     transcodeRunning: 'Transcoding…',
     transcodeReady: 'Web version ready',
     transcodeFailed: 'Transcode failed',
+    removedFromAlbum: 'Removed from album',
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
     resetZoom: 'Reset zoom',
@@ -89,6 +90,7 @@ export default {
   errors: {
     noWritableLibrary: 'no writable library configured',
     addedToAlbum: 'Added to album',
+    addedToAlbumName: 'Added to album "{name}"',
     scanFailed: 'Scan failed',
     uploadFailed: 'Upload failed ({name}): {message}',
   },

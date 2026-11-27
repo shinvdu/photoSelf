@@ -77,6 +77,7 @@ export default {
     transcodeRunning: '正在转码…',
     transcodeReady: '网页版已就绪',
     transcodeFailed: '转码失败',
+    removedFromAlbum: '已从相册移除',
     zoomIn: '放大',
     zoomOut: '缩小',
     resetZoom: '重置缩放',
@@ -89,6 +90,7 @@ export default {
   errors: {
     noWritableLibrary: '没有可写媒体库',
     addedToAlbum: '已加入相册',
+    addedToAlbumName: '已加入相册「{name}」',
     scanFailed: '扫描失败',
     uploadFailed: '上传失败（{name}）：{message}',
   },

@@ -54,6 +54,9 @@ const libraryError = ref('')
 const newLibrary = ref({ path: '', name: '', read_only: true })
 const browser = ref(null)
 const browserLoading = ref(false)
+const toast = ref(null)
+
+let toastTimer = null
 
 const zoomStage = ref(null)
 const zoom = ref(1)
@@ -167,6 +170,14 @@ async function loadTrash() {
   } catch (err) {
     error.value = err.message
   }
+}
+
+function showToast(text, isError = false) {
+  toast.value = { text, error: isError }
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toast.value = null
+  }, isError ? 4000 : 2500)
 }
 
 async function loadManagedLibraries() {
@@ -778,11 +789,15 @@ async function addSelectedToAlbum() {
       method: 'POST',
       body: JSON.stringify({ item_id: selected.value.id }),
     })
-    uploadMessage.value = t('errors.addedToAlbum')
+    const album = albums.value.find(
+      (entry) => String(entry.id) === String(addAlbumId.value),
+    )
+    showToast(t('errors.addedToAlbumName', { name: album?.name || '' }))
     await loadAlbums()
     if (activeAlbum.value?.id === addAlbumId.value) await loadAlbumItems()
   } catch (err) {
     error.value = err.message
+    showToast(err.message, true)
   }
 }
 
@@ -795,8 +810,10 @@ async function removeSelectedFromAlbum() {
     await loadAlbumItems()
     await loadAlbums()
     close()
+    showToast(t('lightbox.removedFromAlbum'))
   } catch (err) {
     error.value = err.message
+    showToast(err.message, true)
   }
 }
 
@@ -958,6 +975,7 @@ onUnmounted(() => {
   observer?.disconnect()
   if (scanTimer) clearTimeout(scanTimer)
   if (transcodeTimer) clearTimeout(transcodeTimer)
+  if (toastTimer) clearTimeout(toastTimer)
   window.removeEventListener('keydown', onKey)
   document.body.classList.remove('modal-open')
 })
@@ -1431,5 +1449,9 @@ onUnmounted(() => {
         <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
       </div>
     </aside>
+  </div>
+
+  <div v-if="toast" class="toast" :class="{ error: toast.error }" role="status">
+    {{ toast.text }}
   </div>
 </template>
