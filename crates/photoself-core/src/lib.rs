@@ -9,6 +9,7 @@ pub mod model;
 pub mod scan;
 pub mod thumb;
 pub mod util;
+pub mod video;
 
 pub use config::Config;
 pub use db::Db;

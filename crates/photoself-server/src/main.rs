@@ -4,6 +4,7 @@ mod state;
 mod ui;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -75,6 +76,7 @@ async fn serve(config_path: PathBuf) -> Result<()> {
     db.ensure_libraries(&config.libraries)?;
 
     let state = state::AppState::new(config.clone(), db);
+    spawn_scan_scheduler(state.clone());
     if config.scan.on_start {
         if let Err(error) = api::start_scan(state.clone(), None) {
             tracing::warn!(%error, "startup scan not started");
@@ -147,6 +149,42 @@ fn hash_password(password: &str) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     println!("{hash}");
     Ok(())
+}
+
+fn parse_scan_interval(raw: &str) -> Option<Duration> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw == "0" {
+        return None;
+    }
+    let (value, unit) = raw.split_at(raw.find(|character: char| !character.is_ascii_digit())?);
+    let value: u64 = value.parse().ok()?;
+    if value == 0 {
+        return None;
+    }
+    let multiplier = match unit.trim().to_ascii_lowercase().as_str() {
+        "s" | "sec" | "secs" => 1,
+        "m" | "min" | "mins" => 60,
+        "h" | "hr" | "hrs" => 60 * 60,
+        "d" | "day" | "days" => 24 * 60 * 60,
+        _ => return None,
+    };
+    Some(Duration::from_secs(value * multiplier))
+}
+
+fn spawn_scan_scheduler(state: state::AppState) {
+    let Some(interval) = parse_scan_interval(&state.config.scan.interval) else {
+        return;
+    };
+    tracing::info!(seconds = interval.as_secs(), "scheduled scans enabled");
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            match api::start_scan(state.clone(), None) {
+                Ok(job) => tracing::info!(job = %job, "scheduled scan started"),
+                Err(error) => tracing::debug!(%error, "scheduled scan skipped"),
+            }
+        }
+    });
 }
 
 async fn shutdown_signal() {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 — 2026-11-27
+
+- Tags: create/delete, attach/detach, tag filter on the timeline and API.
+- Albums: create/delete, add/remove items, cover image, album view.
+- Write mode: multipart upload, safe delete to a trash directory, restore and
+  permanent purge. Disabled by default; libraries must be writable.
+- Search filters: filename, favorites, tag, album, kind, library and date range.
+- Video derivatives: background web-MP4 (H.264/AAC) queue with `play_url` and a
+  Range-capable `/derived` endpoint.
+- Scheduled scans via `scan.interval` (`s`/`m`/`h`/`d`).
+- PWA manifest and service worker; installable app shell.
+- UI: Albums and Trash views, upload button, tag editing, web-video action.
+
 ## 0.1.0 — 2026-11-26
 
 Initial MVP.

@@ -92,6 +92,8 @@ pub struct ItemQuery {
     pub kind: Option<String>,
     pub q: Option<String>,
     pub favorite: Option<bool>,
+    pub tag: Option<String>,
+    pub album_id: Option<String>,
     pub from: Option<String>,
     pub to: Option<String>,
     pub cursor: Option<String>,
@@ -113,4 +115,34 @@ pub struct ScanStats {
     pub scanned: usize,
     pub errors: usize,
     pub missing: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Album {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub cover_item_id: Option<String>,
+    pub item_count: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashEntry {
+    pub id: String,
+    pub item_id: String,
+    pub library_id: String,
+    pub rel_path: String,
+    pub filename: String,
+    pub trash_path: String,
+    pub deleted_at: String,
 }

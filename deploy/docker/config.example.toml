@@ -28,6 +28,7 @@ concurrency = 1
 
 [video]
 transcode_enabled = false
+transcode_concurrency = 1
 
 [auth]
 mode = "none"     # put a reverse proxy / VPN in front for remote access

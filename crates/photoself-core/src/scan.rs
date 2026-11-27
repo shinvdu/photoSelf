@@ -178,8 +178,8 @@ pub fn scan_library(
 
     let mut stats = ScanStats::default();
     for (index, (path, rel_path)) in files.iter().enumerate() {
-        match scan_one(config, db, library, path, rel_path) {
-            Ok(()) => stats.scanned += 1,
+        match scan_file(config, db, library, path, rel_path) {
+            Ok(_) => stats.scanned += 1,
             Err(error) => {
                 stats.errors += 1;
                 warn!(
@@ -209,13 +209,13 @@ pub fn scan_library(
     Ok(stats)
 }
 
-fn scan_one(
+pub fn scan_file(
     config: &Config,
     db: &Db,
     library: &Library,
     path: &Path,
     rel_path: &str,
-) -> Result<()> {
+) -> Result<MediaItem> {
     let metadata =
         fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
     let size = metadata.len() as i64;
@@ -334,5 +334,5 @@ fn scan_one(
     } else {
         db.upsert_item(&item)?;
     }
-    Ok(())
+    Ok(item)
 }

@@ -21,7 +21,9 @@ The scanner only reads files. It never moves, renames or deletes photos.
 | Area | What it does |
 |---|---|
 | Timeline | Day-grouped grid, lazy thumbnails, infinite scroll |
-| Search | Filename search (`q` parameter) |
+| Albums | Create albums, add/remove items, cover view |
+| Trash | Restore or permanently delete removed items |
+| Search / tag filter | Filename and tag filters |
 | Favorites | Filter items marked as favorite |
 | Scan | Starts a background scan job; progress is shown |
 | Lightbox | Image preview (large JPEG thumbnail), video playback, metadata, download |
@@ -135,6 +137,35 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 - Re-run after importing new HEIC/HEVC files. `--meta-only` refreshes metadata
   only; existing previews are skipped unless `--force`.
 
+## Tags, albums, upload and trash
+
+- **Tags:** open an item, type/select a tag in the lightbox, then use the tag
+  filter in the header. `POST /api/v1/tags` creates tags; attach with
+  `POST /api/v1/items/{id}/tags`.
+- **Albums:** switch to **Albums**, create one, then add the current item from
+  the lightbox. Album membership is virtual; no files are moved.
+- **Upload:** with `[write] enabled = true` and a writable library, press
+  **Upload** and select image/video files. The server writes a temporary file
+  and indexes it immediately.
+- **Delete/trash:** the lightbox **Delete** button moves the file into
+  `<data.dir>/trash/<library-id>/` and marks the row missing. Open **Trash** to
+  restore or permanently delete.
+- **Search filters:** filename query, favorites, and tag filter apply to the
+  timeline. `kind`, `library`, `from`, `to`, `album` are available on the API.
+
+## Web video versions
+
+Set `video.transcode_enabled = true` and make sure `ffmpeg` has `libx264` and
+`aac`. In the lightbox, use **Generate web version**. The server queues a job
+under `data/cache/derived/` and exposes `play_url` (an H.264/AAC MP4).
+
+## Scheduled scans and PWA
+
+- `scan.interval = "15m"` runs a background scan every 15 minutes. Supported
+  suffixes: `s`, `m`, `h`, `d`; `"0"` disables.
+- The UI ships a PWA manifest and service worker. Install it from Chrome/Edge
+  (HTTPS or localhost) to get a standalone window and an offline app shell.
+
 ## Authentication
 
 `auth.mode = "none"` is for a trusted LAN only. For a single admin:
@@ -199,11 +230,13 @@ concurrency = 1
 
 ## Known behavior and limitations
 
-- Tags, albums, upload/delete, trash and share links are not implemented yet.
-- Video playback uses the original file; MOV/HEVC compatibility depends on the
-  browser (Safari/Apple often works; Chrome/Firefox may not).
+- Write mode is off by default; enabling it lets the API modify the library.
+- Trash retention is manual; purge old entries yourself.
+- Video playback uses the original unless a web MP4 is generated; MOV/HEVC
+  compatibility depends on the browser (Safari/Apple often works; Chrome/Firefox may not).
 - HEIC files can be indexed and previewed through sidecars; the original remains
   HEIC.
 - EXIF dates without timezone are stored as naive local timestamps.
 - `search` is a filename `LIKE` query, not full-text search.
 - The UI shows all libraries in one timeline; per-library filtering is planned.
+- Tags/albums are metadata only; no automatic file organization.

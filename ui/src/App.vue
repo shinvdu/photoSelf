@@ -13,23 +13,43 @@ const PLACEHOLDER =
   )
 
 const info = ref(null)
+const view = ref('timeline')
 const items = ref([])
 const nextCursor = ref(null)
 const loading = ref(false)
 const error = ref('')
 const query = ref('')
 const favoritesOnly = ref(false)
+const tagFilter = ref('')
+const tags = ref([])
 const selected = ref(null)
 const scanning = ref(false)
 const scanProgress = ref(null)
 const sentinel = ref(null)
 
+const albums = ref([])
+const activeAlbum = ref(null)
+const albumItems = ref([])
+const trashEntries = ref([])
+const uploadLibrary = ref('')
+const uploading = ref(false)
+const uploadMessage = ref('')
+const addTagId = ref('')
+const newTagName = ref('')
+const addAlbumId = ref('')
+const transcodeStatus = ref('')
+const videoError = ref(false)
+const fileInput = ref(null)
+const newAlbumName = ref('')
+
 let observer = null
 let scanTimer = null
+let transcodeTimer = null
 
 async function api(path, options = {}) {
+  const isForm = options.body instanceof FormData
   const headers = { Accept: 'application/json', ...(options.headers || {}) }
-  if (options.body) headers['Content-Type'] = 'application/json'
+  if (options.body && !isForm) headers['Content-Type'] = 'application/json'
   const response = await fetch(path, { ...options, headers })
   if (!response.ok) {
     let message = response.statusText
@@ -53,6 +73,15 @@ async function loadInfo() {
   }
 }
 
+async function loadTags() {
+  try {
+    const data = await api(`${API}/tags`)
+    tags.value = data.tags || []
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
 async function loadItems(reset = false) {
   if (loading.value) return
   if (!reset && !nextCursor.value) return
@@ -62,6 +91,7 @@ async function loadItems(reset = false) {
     const params = new URLSearchParams({ limit: '100' })
     if (query.value.trim()) params.set('q', query.value.trim())
     if (favoritesOnly.value) params.set('favorite', 'true')
+    if (tagFilter.value) params.set('tag', tagFilter.value)
     if (!reset && nextCursor.value) params.set('cursor', nextCursor.value)
 
     const data = await api(`${API}/items?${params.toString()}`)
@@ -74,29 +104,112 @@ async function loadItems(reset = false) {
   }
 }
 
-function reload() {
-  nextCursor.value = null
-  loadItems(true)
+async function loadAlbums() {
+  try {
+    const data = await api(`${API}/albums`)
+    albums.value = data.albums || []
+  } catch (err) {
+    error.value = err.message
+  }
 }
 
-function toggleFavorites() {
-  favoritesOnly.value = !favoritesOnly.value
-  reload()
+async function loadAlbumItems() {
+  if (!activeAlbum.value) return
+  loading.value = true
+  try {
+    const data = await api(`${API}/albums/${activeAlbum.value.id}/items?limit=500`)
+    albumItems.value = data.items || []
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    loading.value = false
+  }
 }
 
-const groups = computed(() => {
+async function loadTrash() {
+  try {
+    const data = await api(`${API}/trash`)
+    trashEntries.value = data.entries || []
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+function reloadCurrent() {
+  if (view.value === 'timeline') {
+    nextCursor.value = null
+    loadItems(true)
+  } else if (view.value === 'album') {
+    loadAlbumItems()
+  } else if (view.value === 'trash') {
+    loadTrash()
+  }
+}
+
+function search() {
+  view.value = 'timeline'
+  activeAlbum.value = null
+  reloadCurrent()
+}
+
+function switchView(next) {
+  view.value = next
+  selected.value = null
+  activeAlbum.value = null
+  if (next === 'timeline') loadItems(true)
+  if (next === 'albums') loadAlbums()
+  if (next === 'trash') loadTrash()
+}
+
+function openAlbum(album) {
+  activeAlbum.value = album
+  view.value = 'album'
+  selected.value = null
+  loadAlbumItems()
+}
+
+function backToAlbums() {
+  view.value = 'albums'
+  activeAlbum.value = null
+  selected.value = null
+  loadAlbums()
+}
+
+const writableLibraries = computed(() =>
+  (info.value?.libraries || []).filter((library) => !library.read_only),
+)
+
+const canDeleteSelected = computed(() => {
+  if (!info.value?.write_enabled || !info.value?.trash_enabled || !selected.value) {
+    return false
+  }
+  const library = (info.value.libraries || []).find(
+    (entry) => entry.id === selected.value.library_id,
+  )
+  return Boolean(library && !library.read_only)
+})
+
+const currentItems = computed(() =>
+  view.value === 'album' ? albumItems.value : items.value,
+)
+
+const groups = computed(() => groupsOf(currentItems.value))
+
+const selectedIndex = computed(() =>
+  selected.value
+    ? currentItems.value.findIndex((item) => item.id === selected.value.id)
+    : -1,
+)
+
+function groupsOf(list) {
   const map = new Map()
-  for (const item of items.value) {
+  for (const item of list) {
     const day = (item.taken_at || '1970-01-01').slice(0, 10)
     if (!map.has(day)) map.set(day, [])
     map.get(day).push(item)
   }
   return [...map.entries()].map(([date, groupItems]) => ({ date, items: groupItems }))
-})
-
-const selectedIndex = computed(() =>
-  selected.value ? items.value.findIndex((item) => item.id === selected.value.id) : -1,
-)
+}
 
 function dateLabel(day) {
   if (!day || day.startsWith('1970-')) return 'Undated'
@@ -110,16 +223,13 @@ function dateLabel(day) {
 }
 
 function formatDate(value) {
-  if (!value) return 'Unknown'
-  return value.replace('T', ' ')
+  return value ? value.replace('T', ' ') : 'Unknown'
 }
 
 function formatDuration(ms) {
   if (!ms) return ''
   const total = Math.round(ms / 1000)
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
 function formatBytes(bytes) {
@@ -136,6 +246,10 @@ function formatBytes(bytes) {
 
 function openItem(item) {
   selected.value = item
+  videoError.value = false
+  transcodeStatus.value = ''
+  addTagId.value = ''
+  addAlbumId.value = ''
 }
 
 function close() {
@@ -143,12 +257,12 @@ function close() {
 }
 
 function prev() {
-  if (selectedIndex.value > 0) selected.value = items.value[selectedIndex.value - 1]
+  if (selectedIndex.value > 0) selected.value = currentItems.value[selectedIndex.value - 1]
 }
 
 function next() {
-  if (selectedIndex.value >= 0 && selectedIndex.value < items.value.length - 1) {
-    selected.value = items.value[selectedIndex.value + 1]
+  if (selectedIndex.value >= 0 && selectedIndex.value < currentItems.value.length - 1) {
+    selected.value = currentItems.value[selectedIndex.value + 1]
   }
 }
 
@@ -158,11 +272,18 @@ async function toggleFavorite(item) {
       method: 'PATCH',
       body: JSON.stringify({ favorite: !item.favorite }),
     })
-    item.favorite = updated.favorite
-    if (selected.value?.id === item.id) selected.value.favorite = updated.favorite
+    replaceItem(updated)
   } catch (err) {
     error.value = err.message
   }
+}
+
+function replaceItem(updated) {
+  for (const list of [items.value, albumItems.value]) {
+    const index = list.findIndex((item) => item.id === updated.id)
+    if (index >= 0) list.splice(index, 1, updated)
+  }
+  if (selected.value?.id === updated.id) selected.value = updated
 }
 
 function onImgError(event) {
@@ -189,7 +310,7 @@ async function pollScan(jobId) {
     if (job.state === 'completed' || job.state === 'failed') {
       scanning.value = false
       if (job.state === 'completed') {
-        await Promise.all([loadInfo(), loadItems(true)])
+        await Promise.all([loadInfo(), loadItems(true), loadTags()])
       } else {
         error.value = job.error || 'scan failed'
       }
@@ -198,6 +319,228 @@ async function pollScan(jobId) {
     scanTimer = setTimeout(() => pollScan(jobId), 1000)
   } catch (err) {
     scanning.value = false
+    error.value = err.message
+  }
+}
+
+function onFiles(event) {
+  const files = [...(event.target.files || [])]
+  event.target.value = ''
+  if (files.length) uploadFiles(files)
+}
+
+async function uploadFiles(files) {
+  const library = uploadLibrary.value
+  if (!library) {
+    error.value = 'no writable library configured'
+    return
+  }
+  uploading.value = true
+  error.value = ''
+  let done = 0
+  for (const file of files) {
+    const form = new FormData()
+    form.append('library', library)
+    form.append('file', file, file.name)
+    try {
+      await api(`${API}/upload`, { method: 'POST', body: form })
+      done += 1
+      uploadMessage.value = `Uploaded ${done}/${files.length}: ${file.name}`
+    } catch (err) {
+      error.value = `Upload failed (${file.name}): ${err.message}`
+      break
+    }
+  }
+  uploading.value = false
+  await loadInfo()
+  if (view.value === 'timeline') await loadItems(true)
+  if (view.value === 'album') await loadAlbumItems()
+}
+
+async function createTag() {
+  if (!newTagName.value.trim()) return
+  try {
+    const tag = await api(`${API}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name: newTagName.value.trim() }),
+    })
+    await loadTags()
+    newTagName.value = ''
+    addTagId.value = String(tag.id)
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function attachTag(tagId) {
+  if (!selected.value || !tagId) return
+  try {
+    const updated = await api(`${API}/items/${selected.value.id}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_id: Number(tagId) }),
+    })
+    replaceItem(updated)
+    await loadTags()
+    addTagId.value = ''
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function detachTag(tagId) {
+  if (!selected.value) return
+  try {
+    const updated = await api(`${API}/items/${selected.value.id}/tags/${tagId}`, {
+      method: 'DELETE',
+    })
+    replaceItem(updated)
+    await loadTags()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function createAndAttachTag() {
+  if (!newTagName.value.trim()) return
+  try {
+    const tag = await api(`${API}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name: newTagName.value.trim() }),
+    })
+    newTagName.value = ''
+    await loadTags()
+    await attachTag(tag.id)
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function createAlbum() {
+  if (!newAlbumName.value.trim()) return
+  try {
+    await api(`${API}/albums`, {
+      method: 'POST',
+      body: JSON.stringify({ name: newAlbumName.value.trim() }),
+    })
+    newAlbumName.value = ''
+    await loadAlbums()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function deleteAlbum(album) {
+  if (!confirm(`Delete album "${album.name}"? The photos stay in the library.`)) return
+  try {
+    await api(`${API}/albums/${album.id}`, { method: 'DELETE' })
+    if (activeAlbum.value?.id === album.id) backToAlbums()
+    else await loadAlbums()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function addSelectedToAlbum() {
+  if (!selected.value || !addAlbumId.value) return
+  try {
+    await api(`${API}/albums/${addAlbumId.value}/items`, {
+      method: 'POST',
+      body: JSON.stringify({ item_id: selected.value.id }),
+    })
+    uploadMessage.value = 'Added to album'
+    await loadAlbums()
+    if (activeAlbum.value?.id === addAlbumId.value) await loadAlbumItems()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function removeSelectedFromAlbum() {
+  if (!selected.value || !activeAlbum.value) return
+  try {
+    await api(`${API}/albums/${activeAlbum.value.id}/items/${selected.value.id}`, {
+      method: 'DELETE',
+    })
+    await loadAlbumItems()
+    await loadAlbums()
+    close()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function deleteSelected() {
+  if (!selected.value) return
+  if (!confirm(`Move "${selected.value.filename}" to trash?`)) return
+  const id = selected.value.id
+  try {
+    await api(`${API}/items/${id}`, { method: 'DELETE' })
+    close()
+    items.value = items.value.filter((item) => item.id !== id)
+    albumItems.value = albumItems.value.filter((item) => item.id !== id)
+    await loadInfo()
+    await loadTrash()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function restoreEntry(entry) {
+  try {
+    await api(`${API}/trash/${entry.id}/restore`, { method: 'POST' })
+    await Promise.all([loadTrash(), loadInfo(), loadItems(true)])
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function purgeEntry(entry) {
+  if (!confirm(`Permanently delete "${entry.filename}"?`)) return
+  try {
+    await api(`${API}/trash/${entry.id}`, { method: 'DELETE' })
+    await loadTrash()
+  } catch (err) {
+    error.value = err.message
+  }
+}
+
+async function transcodeSelected() {
+  if (!selected.value) return
+  transcodeStatus.value = 'Starting…'
+  try {
+    const data = await api(`${API}/items/${selected.value.id}/transcode`, {
+      method: 'POST',
+    })
+    if (data.ready) {
+      const updated = await api(`${API}/items/${selected.value.id}`)
+      replaceItem(updated)
+      transcodeStatus.value = 'Web version ready'
+      return
+    }
+    pollTranscode(data.job_id, selected.value.id)
+  } catch (err) {
+    transcodeStatus.value = ''
+    error.value = err.message
+  }
+}
+
+async function pollTranscode(jobId, itemId) {
+  try {
+    const job = await api(`${API}/jobs/${jobId}`)
+    transcodeStatus.value = job.message || job.state
+    if (job.state === 'completed') {
+      const updated = await api(`${API}/items/${itemId}`)
+      replaceItem(updated)
+      transcodeStatus.value = 'Web version ready'
+      return
+    }
+    if (job.state === 'failed') {
+      transcodeStatus.value = job.error || 'Transcode failed'
+      return
+    }
+    transcodeTimer = setTimeout(() => pollTranscode(jobId, itemId), 1500)
+  } catch (err) {
+    transcodeStatus.value = ''
     error.value = err.message
   }
 }
@@ -211,14 +554,34 @@ function onKey(event) {
 
 watch(selected, (value) => {
   document.body.classList.toggle('modal-open', Boolean(value))
+  videoError.value = false
+  transcodeStatus.value = ''
+  addTagId.value = ''
+  addAlbumId.value = ''
 })
 
+watch(
+  info,
+  (value) => {
+    if (!uploadLibrary.value && value) {
+      uploadLibrary.value =
+        (value.libraries || []).find((library) => !library.read_only)?.id || ''
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(async () => {
-  await Promise.all([loadInfo(), loadItems(true)])
+  await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
 
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0]?.isIntersecting && nextCursor.value && !loading.value) {
+      if (
+        view.value === 'timeline' &&
+        entries[0]?.isIntersecting &&
+        nextCursor.value &&
+        !loading.value
+      ) {
         loadItems(false)
       }
     },
@@ -232,6 +595,7 @@ onMounted(async () => {
 onUnmounted(() => {
   observer?.disconnect()
   if (scanTimer) clearTimeout(scanTimer)
+  if (transcodeTimer) clearTimeout(transcodeTimer)
   window.removeEventListener('keydown', onKey)
   document.body.classList.remove('modal-open')
 })
@@ -245,60 +609,162 @@ onUnmounted(() => {
       <small v-if="info">{{ info.version }}</small>
     </div>
 
-    <form class="search" @submit.prevent="reload">
+    <nav class="tabs">
+      <button :class="{ active: view === 'timeline' }" @click="switchView('timeline')">
+        Timeline
+      </button>
+      <button :class="{ active: view === 'albums' || view === 'album' }" @click="switchView('albums')">
+        Albums
+      </button>
+      <button
+        v-if="info && info.write_enabled && info.trash_enabled"
+        :class="{ active: view === 'trash' }"
+        @click="switchView('trash')"
+      >
+        Trash
+      </button>
+    </nav>
+
+    <form class="search" @submit.prevent="search">
       <input v-model="query" type="search" placeholder="Search filename…" />
       <button type="submit">Search</button>
     </form>
 
     <div class="actions">
-      <button :class="{ active: favoritesOnly }" @click="toggleFavorites">★ Favorites</button>
+      <select v-if="view === 'timeline'" v-model="tagFilter" @change="reloadCurrent">
+        <option value="">All tags</option>
+        <option v-for="tag in tags" :key="tag.id" :value="tag.name">
+          {{ tag.name }}
+        </option>
+      </select>
+      <select
+        v-if="writableLibraries.length > 1"
+        v-model="uploadLibrary"
+        title="Upload library"
+      >
+        <option v-for="library in writableLibraries" :key="library.id" :value="library.id">
+          {{ library.name || library.id }}
+        </option>
+      </select>
+      <button :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly; reloadCurrent()">
+        ★ Favorites
+      </button>
+      <button
+        v-if="info && info.write_enabled && writableLibraries.length"
+        :disabled="uploading"
+        @click="fileInput?.click()"
+      >
+        {{ uploading ? 'Uploading…' : 'Upload' }}
+      </button>
       <button :disabled="scanning" @click="startScan">
         {{ scanning ? 'Scanning…' : 'Scan' }}
       </button>
     </div>
   </header>
 
+  <input
+    ref="fileInput"
+    class="hidden-input"
+    type="file"
+    multiple
+    accept="image/*,video/*,.heic,.heif,.mov"
+    @change="onFiles"
+  />
+
   <div class="statusbar">
-    <span>{{ info ? info.item_count : items.length }} items</span>
+    <span>{{ info ? info.item_count : currentItems.length }} items</span>
     <span v-if="scanning && scanProgress">
       scan {{ scanProgress.progress }} / {{ scanProgress.total }}
     </span>
+    <span v-if="uploadMessage">{{ uploadMessage }}</span>
     <span v-if="error" class="error">{{ error }}</span>
   </div>
 
   <main>
-    <div v-if="!loading && items.length === 0" class="empty">
-      <h2>No media indexed yet</h2>
-      <p>Check <code>config.toml</code>, then press <strong>Scan</strong>.</p>
-    </div>
-
-    <section v-for="group in groups" :key="group.date" class="day">
-      <h2>{{ dateLabel(group.date) }} <small>{{ group.items.length }}</small></h2>
-      <div class="grid">
-        <button
-          v-for="item in group.items"
-          :key="item.id"
-          class="tile"
-          type="button"
-          @click="openItem(item)"
-        >
-          <img :src="item.thumb_url" :alt="item.filename" loading="lazy" @error="onImgError" />
-          <span v-if="item.kind === 'video'" class="play">▶</span>
-          <span v-if="item.favorite" class="fav">★</span>
-        </button>
+    <!-- Albums -->
+    <section v-if="view === 'albums'" class="albums-view">
+      <div class="create-row">
+        <input v-model="newAlbumName" placeholder="New album name…" @keyup.enter="createAlbum" />
+        <button @click="createAlbum">Create album</button>
+      </div>
+      <div v-if="!albums.length" class="empty">
+        <h2>No albums yet</h2>
+        <p>Create an album, then add photos from the lightbox.</p>
+      </div>
+      <div class="album-grid">
+        <article v-for="album in albums" :key="album.id" class="album-card" @click="openAlbum(album)">
+          <img v-if="album.cover_url" :src="album.cover_url" :alt="album.name" @error="onImgError" />
+          <div v-else class="album-cover-empty">▣</div>
+          <div class="album-info">
+            <strong>{{ album.name }}</strong>
+            <small>{{ album.item_count }} items</small>
+          </div>
+          <button class="album-delete" title="Delete album" @click.stop="deleteAlbum(album)">×</button>
+        </article>
       </div>
     </section>
 
-    <div ref="sentinel" class="sentinel"></div>
-    <button
-      v-if="nextCursor"
-      class="load-more"
-      type="button"
-      :disabled="loading"
-      @click="loadItems(false)"
-    >
-      {{ loading ? 'Loading…' : 'Load more' }}
-    </button>
+    <!-- Trash -->
+    <section v-else-if="view === 'trash'" class="trash-view">
+      <h2>Trash</h2>
+      <p v-if="!trashEntries.length" class="empty">Trash is empty.</p>
+      <div v-for="entry in trashEntries" :key="entry.id" class="trash-row">
+        <div>
+          <strong>{{ entry.filename }}</strong>
+          <small>{{ formatDate(entry.deleted_at) }} · {{ entry.library_id }}</small>
+        </div>
+        <div class="row">
+          <button @click="restoreEntry(entry)">Restore</button>
+          <button class="danger" @click="purgeEntry(entry)">Delete forever</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Timeline / album -->
+    <template v-else>
+      <div v-if="view === 'album'" class="album-header">
+        <button @click="backToAlbums">← Albums</button>
+        <h2>{{ activeAlbum?.name }}</h2>
+        <small>{{ albumItems.length }} items</small>
+        <button v-if="selected && activeAlbum" @click="removeSelectedFromAlbum">
+          Remove selected from album
+        </button>
+      </div>
+
+      <div v-if="!loading && currentItems.length === 0" class="empty">
+        <h2>{{ view === 'album' ? 'Album is empty' : 'No media indexed yet' }}</h2>
+        <p v-if="view !== 'album'">Check <code>config.toml</code>, then press <strong>Scan</strong>.</p>
+      </div>
+
+      <section v-for="group in groups" :key="group.date" class="day">
+        <h2>{{ dateLabel(group.date) }} <small>{{ group.items.length }}</small></h2>
+        <div class="grid">
+          <button
+            v-for="item in group.items"
+            :key="item.id"
+            class="tile"
+            type="button"
+            @click="openItem(item)"
+          >
+            <img :src="item.thumb_url" :alt="item.filename" loading="lazy" @error="onImgError" />
+            <span v-if="item.kind === 'video'" class="play">▶</span>
+            <span v-if="item.favorite" class="fav">★</span>
+            <span v-if="item.tags && item.tags.length" class="tag-dot">{{ item.tags.length }}</span>
+          </button>
+        </div>
+      </section>
+
+      <div ref="sentinel" class="sentinel"></div>
+      <button
+        v-if="view === 'timeline' && nextCursor"
+        class="load-more"
+        type="button"
+        :disabled="loading"
+        @click="loadItems(false)"
+      >
+        {{ loading ? 'Loading…' : 'Load more' }}
+      </button>
+    </template>
   </main>
 
   <div v-if="selected" class="lightbox" @click.self="close">
@@ -311,13 +777,20 @@ onUnmounted(() => {
         :src="selected.preview_url || selected.media_url"
         :alt="selected.filename"
       />
-      <video
-        v-else
-        :src="selected.media_url"
-        controls
-        autoplay
-        playsinline
-      ></video>
+      <template v-else>
+        <video
+          :src="selected.play_url || selected.media_url"
+          controls
+          autoplay
+          playsinline
+          @error="videoError = true"
+        ></video>
+        <div v-if="videoError" class="video-fallback">
+          This browser cannot play the original codec.
+          <a :href="selected.media_url" :download="selected.filename">Download original</a>
+          <span v-if="info && info.transcode_enabled"> or generate a web version below.</span>
+        </div>
+      </template>
     </div>
 
     <button class="nav next" type="button" @click.stop="next">›</button>
@@ -335,12 +808,61 @@ onUnmounted(() => {
         <div v-if="selected.camera"><dt>Camera</dt><dd>{{ selected.camera }}</dd></div>
         <div><dt>Size</dt><dd>{{ formatBytes(selected.size) }}</dd></div>
       </dl>
+
+      <div class="tags">
+        <span v-for="tag in selected.tags || []" :key="tag.id" class="tag-chip">
+          {{ tag.name }}
+          <button type="button" @click="detachTag(tag.id)">×</button>
+        </span>
+      </div>
+      <div class="tag-add">
+        <select v-model="addTagId">
+          <option value="">Add tag…</option>
+          <option v-for="tag in tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
+        </select>
+        <button type="button" :disabled="!addTagId" @click="attachTag(addTagId)">+</button>
+        <input v-model="newTagName" placeholder="New tag" @keyup.enter="createAndAttachTag" />
+        <button type="button" @click="createAndAttachTag">Create</button>
+      </div>
+
+      <div v-if="albums.length" class="tag-add">
+        <select v-model="addAlbumId">
+          <option value="">Add to album…</option>
+          <option
+            v-for="album in albums"
+            :key="album.id"
+            :value="album.id"
+            :disabled="activeAlbum && activeAlbum.id === album.id"
+          >
+            {{ album.name }}
+          </option>
+        </select>
+        <button type="button" :disabled="!addAlbumId" @click="addSelectedToAlbum">Add</button>
+        <button v-if="activeAlbum" type="button" @click="removeSelectedFromAlbum">Remove</button>
+      </div>
+
       <div class="row">
         <button type="button" @click="toggleFavorite(selected)">
           {{ selected.favorite ? '★ Unfavorite' : '☆ Favorite' }}
         </button>
         <a :href="selected.media_url" :download="selected.filename">Download</a>
+        <button
+          v-if="selected.kind === 'video' && info && info.transcode_enabled && !selected.play_url"
+          type="button"
+          @click="transcodeSelected"
+        >
+          Generate web version
+        </button>
+        <button
+          v-if="canDeleteSelected"
+          type="button"
+          class="danger"
+          @click="deleteSelected"
+        >
+          Delete
+        </button>
       </div>
+      <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
     </aside>
   </div>
 </template>

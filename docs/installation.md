@@ -236,6 +236,36 @@ password_hash = "$argon2id$..."
 Basic auth is single-user. Behind a trusted reverse proxy, use
 `auth.mode = "proxy"`; the proxy must authenticate and set `X-Forwarded-User`.
 
+
+### Write mode, trash and video derivatives
+
+Write operations are disabled by default:
+
+```toml
+[write]
+enabled = true
+max_upload_bytes = 536870912
+
+[[libraries]]
+id = "photos"
+path = "/photos"
+read_only = false     # required for upload/delete
+
+[trash]
+enabled = true
+retention_days = 30
+```
+
+- `POST /api/v1/upload` accepts multipart `library` + `file`.
+- `DELETE /api/v1/items/{id}` moves the file to `<data.dir>/trash/<library-id>/`
+  and marks the item missing; restore/purge via `/api/v1/trash`.
+- Enabling write mode means the API (and therefore authentication) can modify
+  the library. Keep it behind auth and never expose it publicly.
+- Video web versions: set `video.transcode_enabled = true` and install an
+  ffmpeg with a H.264 encoder. The UI/API queues a job and exposes `play_url`.
+- Scheduled scans: `scan.interval = "15m"` (supports `s`, `m`, `h`, `d`).
+- The UI is a PWA; install it from a browser over HTTPS (or localhost).
+
 ---
 
 ## systemd

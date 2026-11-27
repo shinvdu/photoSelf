@@ -80,7 +80,7 @@ previews on a PC/NAS and point photoSelf at them:
 # run on a PC; source may be sshfs/NFS/SMB
 ./scripts/make-sidecars.py \
   --source /mnt/router/picture \
-  --output /mnt/router/sda1/photo-app/sidecars/family \
+  --output /mnt/router/usb/photo-app/sidecars/family \
   --sizes 320,1280 --video-sizes 320 --jobs 2
 ```
 

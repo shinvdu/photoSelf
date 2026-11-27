@@ -231,6 +231,36 @@ password_hash = "$argon2id$..."
 Basic 模式是单用户。若在可信反向代理后，可用 `auth.mode = "proxy"`；代理必须
 完成认证并设置 `X-Forwarded-User`。
 
+
+### 写入模式、回收站与视频派生
+
+写操作默认关闭：
+
+```toml
+[write]
+enabled = true
+max_upload_bytes = 536870912
+
+[[libraries]]
+id = "photos"
+path = "/photos"
+read_only = false     # 上传/删除必须可写
+
+[trash]
+enabled = true
+retention_days = 30
+```
+
+- `POST /api/v1/upload` 接收 multipart `library` + `file`。
+- `DELETE /api/v1/items/{id}` 会把文件移到 `<data.dir>/trash/<library-id>/`，
+  并把条目标记为 missing；通过 `/api/v1/trash` 恢复或永久清除。
+- 开启写入模式意味着 API（以及认证）可以修改照片库；必须放在认证之后，
+  绝不能直接暴露到公网。
+- 视频网页版：设置 `video.transcode_enabled = true`，并安装带 H.264 编码器的
+  ffmpeg；UI/API 会排队生成并返回 `play_url`。
+- 定时扫描：`scan.interval = "15m"`（支持 `s`、`m`、`h`、`d`）。
+- UI 是 PWA；通过 HTTPS（或 localhost）在浏览器中安装。
+
 ---
 
 ## systemd

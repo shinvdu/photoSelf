@@ -59,8 +59,11 @@ timeout_seconds = 120
 
 [video]
 poster_enabled = true
-transcode_enabled = false   # reserved for a future release
+transcode_enabled = false   # enable to generate browser-friendly web MP4
 max_height = 1080
+transcode_concurrency = 1
+transcode_max_width = 1280
+transcode_crf = 23
 
 [auth]
 # none   = trusted LAN only
@@ -73,7 +76,7 @@ session_ttl_hours = 720
 
 [scan]
 on_start = true
-interval = "0"             # reserved for a future release; "0" disables it
+interval = "0"             # e.g. "15m", "1h"; "0" disables scheduled scans
 concurrency = 2          # reserved; scanning is currently sequential
 follow_symlinks = false
 missing_retention_days = 30  # reserved; missing rows are kept
@@ -81,9 +84,15 @@ hash = true                # BLAKE3 content hash; enables rename detection
 probe_videos = true        # ffprobe; set false if ffprobe is unavailable
 
 [trash]
-enabled = true             # reserved for the future delete/restore implementation
+enabled = true
 retention_days = 30
 # dir = "./data/trash"
+
+[write]
+# Enables upload / delete / album + tag edits through the API/UI.
+# Libraries must also have read_only = false.
+enabled = false
+max_upload_bytes = 536870912
 
 [logging]
 level = "info"

@@ -12,7 +12,7 @@
 - **前端：** Vue 3 + Vite
 - **存储：** 直接使用现有目录；SQLite 只是可重建的索引
 - **设计：** 默认只读、低内存、对反向代理友好
-- **状态：** v0.1 MVP —— 浏览、缩略图、视频海报、收藏已可用；标签、相册、上传/删除、转码是下一步
+- **状态：** v0.2 —— 浏览、标签、相册、上传/删除+回收站、网页版视频队列、定时扫描和 PWA
 
 ![photoSelf 时间线](docs/screenshot.png)
 
@@ -44,7 +44,7 @@
 
 ## 功能
 
-### v0.1 已实现
+### v0.2 已实现
 
 - 递归扫描一个或多个库，支持忽略规则
 - 文件大小/mtime、EXIF 日期/相机/方向、ffprobe 视频元数据
@@ -53,7 +53,12 @@
 - 时间线分组、懒加载缩略图、灯箱、视频播放
 - 图片缩略图、视频海报（ffmpeg 外部进程）
 - 收藏、文件名搜索
-- 手动扫描 + 任务进度
+- 手动扫描 + 定时扫描（`scan.interval`，如 `15m`）
+- 标签：创建/删除、挂载/移除、按标签筛选
+- 相册：创建/删除、添加/移除条目、封面
+- 上传、删除到回收站、恢复和永久清除（写入模式）
+- 后台 web MP4 转码队列 + 任务状态（`play_url`）
+- PWA / 可安装的离线壳
 - `none` / `basic` / `proxy` 三种认证
 - 独立模式（Rust 同时提供 API、媒体、UI）或反向代理模式
 - 可选 `embed-ui` 特性：前端嵌入单二进制
@@ -63,13 +68,10 @@
 
 ### 计划中
 
-- 标签与虚拟相册
-- 上传 / 删除 / 重命名 + 回收站
-- 后台视频转码队列 / 浏览器兼容的 web MP4
-- 定时扫描、缩略图预热
 - 多用户与分享链接
 - 全文搜索
-- PWA / 离线壳
+- 重命名/移动 UI、缩略图预热
+- 回收站自动过期清理
 
 ---
 
@@ -150,6 +152,9 @@ read_only = true
 - `auth.mode` —— `none`、`basic`（单用户，Argon2id）、`proxy`（信任 `X-Forwarded-User`）
 - `thumbnails.concurrency` —— 512 MB 设备建议 `1`
 - `scan.hash` —— 内容哈希用于重命名识别；只有极慢存储才建议关闭
+- `scan.interval` —— 定时扫描，如 `15m`、`1h`；`0` 关闭
+- `[write] enabled` —— 上传/删除/回收站；目标库还需要 `read_only = false`
+- `video.transcode_enabled` —— 可选的 web MP4 队列（需要带编码器的 ffmpeg）
 
 ### 低内存配置
 
@@ -193,12 +198,12 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 `--meta-only` 只补元数据。依赖：Python 3 + Pillow、ffmpeg/ffprobe、
 `heif-convert`（libheif-examples）。
 
-视频播放仍然使用原始文件；HEVC 在 Safari/Apple 设备上通常可播，
-Chrome/Firefox 可能需要后续生成 web MP4 sidecar。
+视频默认播放原文件；HEVC 在 Safari/Apple 设备上通常可播。
+开启 `video.transcode_enabled` 后，可在灯箱中为单个视频生成 web MP4（H.264/AAC）。
 
 ---
 
-## HTTP API（v0.1）
+## HTTP API（v0.2）
 
 前缀：`/api/v1`。错误返回 `application/problem+json`。
 
@@ -206,9 +211,22 @@ Chrome/Firefox 可能需要后续生成 web MP4 sidecar。
 |---|---|---|
 | GET | `/healthz` | 存活检查（无需认证） |
 | GET | `/api/v1/info` | 版本、模式、库、条目数 |
-| GET | `/api/v1/items` | 时间线；`library`、`kind`、`q`、`favorite`、`from`、`to`、`cursor`、`limit` |
-| GET | `/api/v1/items/{id}` | 条目详情 |
+| GET | `/api/v1/items` | 时间线；`library`、`kind`、`q`、`favorite`、`tag`、`album`、`from`、`to`、`cursor`、`limit` |
+| GET | `/api/v1/items/{id}` | 条目详情（含标签和 `play_url`） |
 | PATCH | `/api/v1/items/{id}` | `{ "favorite": true }` |
+| DELETE | `/api/v1/items/{id}` | 移入回收站（写入模式） |
+| GET/POST | `/api/v1/tags` | 列出/创建标签 |
+| DELETE | `/api/v1/tags/{id}` | 删除标签 |
+| POST/DELETE | `/api/v1/items/{id}/tags[/{tag_id}]` | 挂载/移除标签 |
+| GET/POST | `/api/v1/albums` | 列出/创建相册 |
+| GET/DELETE | `/api/v1/albums/{id}` | 相册详情/删除 |
+| GET/POST | `/api/v1/albums/{id}/items` | 列出/添加相册条目 |
+| DELETE | `/api/v1/albums/{id}/items/{item_id}` | 从相册移除 |
+| POST | `/api/v1/upload` | multipart 上传（`library`、`file`） |
+| GET | `/api/v1/trash` | 回收站列表 |
+| POST/DELETE | `/api/v1/trash/{id}[/restore]` | 恢复或永久清除 |
+| POST | `/api/v1/items/{id}/transcode` | 排队生成 web MP4 |
+| GET | `/api/v1/items/{id}/derived` | 提供 web MP4（支持 Range） |
 | GET | `/api/v1/items/{id}/thumb/{size}` | JPEG 缩略图 |
 | GET | `/api/v1/items/{id}/media` | 原文件，支持 HTTP Range |
 | POST | `/api/v1/scan` | 启动扫描任务 |
@@ -352,9 +370,10 @@ cd ui && npm install && npm run dev
 
 ## 路线图
 
-- **v0.2：** 标签、相册、上传/删除 + 回收站、搜索过滤
-- **v0.3：** 视频派生/web MP4 队列、定时扫描、PWA
-- **v1.0：** 稳定 API、迁移工具、打包、安全审计
+- **v0.2/v0.3（当前）：** 标签、相册、上传/删除 + 回收站、搜索过滤、
+  web MP4 队列、定时扫描、PWA
+- **下一步：** 多用户/分享链接、全文搜索、重命名/移动、回收站自动过期
+- **v1.0：** 稳定 API、迁移、打包、安全审计
 
 ## 设计文档
 

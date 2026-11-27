@@ -26,6 +26,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub scan: ScanConfig,
     pub trash: TrashConfig,
+    pub write: WriteConfig,
     pub logging: LoggingConfig,
 }
 
@@ -170,6 +171,9 @@ pub struct VideoConfig {
     pub poster_enabled: bool,
     pub transcode_enabled: bool,
     pub max_height: u32,
+    pub transcode_concurrency: usize,
+    pub transcode_max_width: u32,
+    pub transcode_crf: u8,
 }
 
 impl Default for VideoConfig {
@@ -178,6 +182,9 @@ impl Default for VideoConfig {
             poster_enabled: true,
             transcode_enabled: false,
             max_height: 1080,
+            transcode_concurrency: 1,
+            transcode_max_width: 1280,
+            transcode_crf: 23,
         }
     }
 }
@@ -243,6 +250,22 @@ impl Default for TrashConfig {
             enabled: true,
             retention_days: 30,
             dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct WriteConfig {
+    pub enabled: bool,
+    pub max_upload_bytes: u64,
+}
+
+impl Default for WriteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_upload_bytes: 512 * 1024 * 1024,
         }
     }
 }
@@ -315,6 +338,12 @@ impl Config {
         }
         if self.ffmpeg.concurrency == 0 {
             bail!("ffmpeg.concurrency must be at least 1");
+        }
+        if self.video.transcode_concurrency == 0 {
+            bail!("video.transcode_concurrency must be at least 1");
+        }
+        if self.write.max_upload_bytes == 0 {
+            bail!("write.max_upload_bytes must be positive");
         }
         Ok(())
     }

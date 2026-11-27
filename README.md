@@ -12,7 +12,7 @@ A lightweight, config-driven, self-hosted photo and video gallery.
 - **Frontend:** Vue 3 + Vite
 - **Storage:** your existing folders; SQLite is only an index
 - **Design:** read-only by default, low memory, reverse-proxy friendly
-- **Status:** v0.1 MVP — browsing, thumbnails, video posters and favorites work; tags, albums, upload/delete and transcoding are next
+- **Status:** v0.2 — browsing, tags, albums, upload/delete + trash, web-video derivative queue, scheduled scans and PWA
 
 ![photoSelf timeline](docs/screenshot.png)
 
@@ -44,7 +44,7 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 
 ## Features
 
-### Working in v0.1
+### Working in v0.2
 
 - Recursive scan of one or more libraries, with ignore globs
 - Indexes JPEG/PNG/WebP/GIF/BMP/TIFF plus HEIC/HEIF/AVIF by extension
@@ -54,7 +54,12 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - Image thumbnails and video poster frames (ffmpeg)
 - Favorites
 - Search by filename
-- Manual scan with job progress
+- Manual and scheduled scanning (`scan.interval`, e.g. `15m`)
+- Tags: create/delete, attach/detach, filter timeline by tag
+- Albums: create/delete, add/remove items, cover image
+- Upload, delete-to-trash, restore and permanent purge (write mode)
+- Background web-MP4 transcoding queue with job status (`play_url`)
+- PWA / installable offline shell
 - `none` / `basic` / `proxy` authentication
 - Standalone mode (Rust serves API, media and UI) or reverse-proxy mode
 - Embedded-UI release build (optional feature)
@@ -63,13 +68,10 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 
 ### Planned
 
-- Tags and virtual albums
-- Upload / delete / rename with a trash folder
-- Background video transcoding queue
-- Scheduled scans and thumbnail pre-warming
 - Multi-user accounts and share links
-- FTS search
-- PWA / offline shell
+- Full-text search
+- Rename / move UI and thumbnail pre-warming
+- Automatic trash retention sweep
 
 ---
 
@@ -161,7 +163,7 @@ and let photoSelf serve them directly:
 # source can be a local folder, NFS/SMB mount, or sshfs
 ./scripts/make-sidecars.py \
   --source /mnt/router/picture \
-  --output /mnt/router/sda1/photo-app/sidecars/family \
+  --output /mnt/router/usb/photo-app/sidecars/family \
   --sizes 320,1280 --video-sizes 320 --jobs 2
 
 # add to config.toml
@@ -195,7 +197,7 @@ concurrency = 1
 
 ---
 
-## HTTP API (v0.1)
+## HTTP API (v0.2)
 
 Base path: `/api/v1`. Errors use `application/problem+json`.
 
@@ -203,9 +205,22 @@ Base path: `/api/v1`. Errors use `application/problem+json`.
 |---|---|---|
 | GET | `/healthz` | liveness (unauthenticated) |
 | GET | `/api/v1/info` | version, mode, libraries, counts |
-| GET | `/api/v1/items` | timeline; `library`, `kind`, `q`, `favorite`, `from`, `to`, `cursor`, `limit` |
-| GET | `/api/v1/items/{id}` | item detail |
+| GET | `/api/v1/items` | timeline; `library`, `kind`, `q`, `favorite`, `tag`, `album`, `from`, `to`, `cursor`, `limit` |
+| GET | `/api/v1/items/{id}` | item detail (includes tags and `play_url`) |
 | PATCH | `/api/v1/items/{id}` | `{ "favorite": true }` |
+| DELETE | `/api/v1/items/{id}` | move to trash (write mode) |
+| GET/POST | `/api/v1/tags` | list/create tags |
+| DELETE | `/api/v1/tags/{id}` | delete a tag |
+| POST/DELETE | `/api/v1/items/{id}/tags[/{tag_id}]` | attach/detach a tag |
+| GET/POST | `/api/v1/albums` | list/create albums |
+| GET/DELETE | `/api/v1/albums/{id}` | album detail/delete |
+| GET/POST | `/api/v1/albums/{id}/items` | list/add album items |
+| DELETE | `/api/v1/albums/{id}/items/{item_id}` | remove from album |
+| POST | `/api/v1/upload` | multipart upload (`library`, `file`) |
+| GET | `/api/v1/trash` | list trash |
+| POST/DELETE | `/api/v1/trash/{id}[/restore]` | restore or purge |
+| POST | `/api/v1/items/{id}/transcode` | queue a web MP4 |
+| GET | `/api/v1/items/{id}/derived` | serve the web MP4 (Range) |
 | GET | `/api/v1/items/{id}/thumb/{size}` | JPEG thumbnail |
 | GET | `/api/v1/items/{id}/media` | original media, supports HTTP Range |
 | POST | `/api/v1/scan` | start a scan job |
@@ -374,14 +389,16 @@ Testing uses synthetic images/videos generated with ffmpeg; no personal data is 
 
 ## Status and known limitations
 
-This is a **v0.1 MVP**, not a finished product:
+This is a **v0.2 MVP**, not a finished product:
 
-- Tags, albums, upload/delete, trash restore and share links are not wired yet.
-- Video is played as-is; no transcoding. MOV/HEVC compatibility depends on the browser.
-- Reserved/not fully enforced yet: `scan.interval`, `scan.concurrency`, `ffmpeg.concurrency`,
-  `missing_retention_days`, `thumbnails.prewarm_on_scan`, `video.transcode_enabled`,
-  `video.max_height`, `trash.*`, `auth.session_ttl_hours`, `server.base_path`, `server.ui_embedded`
-  and `server.trusted_proxies`.
+- Write mode (upload/delete/trash) is disabled by default; enable it deliberately and keep
+  the API behind authentication. The photo library should be writable only when you need it.
+- Video playback uses the original unless a web MP4 is generated; MOV/HEVC compatibility
+  depends on the browser and on ffmpeg having a decoder/encoder.
+- Trash retention is manual: purge old entries yourself (no automatic sweep yet).
+- Reserved/not fully enforced yet: `scan.concurrency`, `missing_retention_days`,
+  `thumbnails.prewarm_on_scan`, `auth.session_ttl_hours`, `server.base_path`,
+  `server.ui_embedded` and `server.trusted_proxies`.
 - `auth.mode = "proxy"` trusts `X-Forwarded-User`; only use it behind a trusted proxy that
   strips client-supplied headers.
 - EXIF dates without timezone are stored as naive local timestamps.
@@ -391,8 +408,9 @@ This is a **v0.1 MVP**, not a finished product:
 
 ## Roadmap
 
-- **v0.2:** tags, albums, upload/delete with trash, search filters
-- **v0.3:** video derivatives/transcode queue, scheduled scans, PWA
+- **v0.2/v0.3 (current):** tags, albums, upload/delete + trash, search filters,
+  web-MP4 queue, scheduled scans, PWA
+- **Next:** multi-user/share links, full-text search, rename/move UI, automatic trash retention
 - **v1.0:** stable API, migrations, packaging, security review
 
 ## Design

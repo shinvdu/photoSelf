@@ -1,18 +1,20 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use photoself_core::model::{ItemQuery, Library, MediaItem, MediaKind, ScanStats};
-use photoself_core::thumb;
+use photoself_core::model::{ItemQuery, Library, MediaItem, MediaKind, ScanStats, TrashEntry};
+use photoself_core::{scan, thumb, util, video};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::io::AsyncWriteExt;
 use tower::ServiceExt;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeFile;
@@ -26,9 +28,37 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/api/v1/info", get(info))
         .route("/api/v1/items", get(list_items))
-        .route("/api/v1/items/{id}", get(get_item).patch(patch_item))
+        .route(
+            "/api/v1/items/{id}",
+            get(get_item).patch(patch_item).delete(delete_item),
+        )
         .route("/api/v1/items/{id}/thumb/{size}", get(get_thumb))
         .route("/api/v1/items/{id}/media", get(get_media))
+        .route("/api/v1/items/{id}/derived", get(get_derived))
+        .route("/api/v1/items/{id}/transcode", post(transcode_item))
+        .route("/api/v1/items/{id}/tags", post(add_item_tag))
+        .route("/api/v1/items/{id}/tags/{tag_id}", delete(remove_item_tag))
+        .route("/api/v1/tags", get(list_tags).post(create_tag))
+        .route("/api/v1/tags/{id}", delete(delete_tag))
+        .route("/api/v1/albums", get(list_albums).post(create_album))
+        .route("/api/v1/albums/{id}", get(get_album).delete(delete_album))
+        .route(
+            "/api/v1/albums/{id}/items",
+            get(album_items).post(add_album_item),
+        )
+        .route(
+            "/api/v1/albums/{id}/items/{item_id}",
+            delete(remove_album_item),
+        )
+        .route(
+            "/api/v1/upload",
+            post(upload).layer(DefaultBodyLimit::max(
+                (state.config.write.max_upload_bytes as usize).saturating_add(1024 * 1024),
+            )),
+        )
+        .route("/api/v1/trash", get(list_trash))
+        .route("/api/v1/trash/{id}/restore", post(restore_trash))
+        .route("/api/v1/trash/{id}", delete(purge_trash))
         .route("/api/v1/scan", post(scan_handler))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/jobs/{id}", get(get_job))
@@ -143,6 +173,9 @@ async fn info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
         "auth_mode": state.config.auth.mode,
         "item_count": count,
         "thumb_sizes": state.config.thumbnails.sizes,
+        "write_enabled": state.config.write.enabled,
+        "trash_enabled": state.config.trash.enabled,
+        "transcode_enabled": state.config.video.transcode_enabled,
         "libraries": libraries,
     })))
 }
@@ -153,6 +186,8 @@ struct ListParams {
     kind: Option<String>,
     q: Option<String>,
     favorite: Option<bool>,
+    tag: Option<String>,
+    album: Option<String>,
     from: Option<String>,
     to: Option<String>,
     cursor: Option<String>,
@@ -168,6 +203,8 @@ async fn list_items(
         kind: params.kind,
         q: params.q,
         favorite: params.favorite,
+        tag: params.tag,
+        album_id: params.album,
         from: params.from,
         to: params.to,
         cursor: params.cursor,
@@ -286,6 +323,637 @@ async fn get_media(
     serve_file(path, headers).await
 }
 
+fn write_allowed(state: &AppState) -> Result<(), ApiError> {
+    if !state.config.write.enabled {
+        return Err(ApiError::forbidden("write mode is disabled"));
+    }
+    Ok(())
+}
+
+fn library_config(
+    state: &AppState,
+    id: &str,
+) -> Result<photoself_core::config::LibraryConfig, ApiError> {
+    state
+        .config
+        .libraries
+        .iter()
+        .find(|library| library.id == id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("library not found"))
+}
+
+fn writable_library(
+    state: &AppState,
+    id: &str,
+) -> Result<photoself_core::config::LibraryConfig, ApiError> {
+    write_allowed(state)?;
+    let library = library_config(state, id)?;
+    if library.read_only {
+        return Err(ApiError::forbidden("library is read-only"));
+    }
+    Ok(library)
+}
+
+fn cover_url(state: &AppState, album: &photoself_core::model::Album) -> Option<String> {
+    let item = state.db.get_item(album.cover_item_id.as_deref()?).ok()??;
+    let size = state
+        .config
+        .thumbnails
+        .sizes
+        .first()
+        .copied()
+        .unwrap_or(320);
+    Some(thumb_url(state, &item, size))
+}
+
+fn album_json(state: &AppState, album: &photoself_core::model::Album) -> Value {
+    json!({
+        "id": album.id,
+        "name": album.name,
+        "description": album.description,
+        "cover_item_id": album.cover_item_id,
+        "cover_url": cover_url(state, album),
+        "item_count": album.item_count,
+        "created_at": album.created_at,
+    })
+}
+
+async fn list_tags(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let tags = tokio::task::spawn_blocking(move || db.list_tags())
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(json!({ "tags": tags })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTag {
+    name: String,
+    color: Option<String>,
+}
+
+async fn create_tag(
+    State(state): State<AppState>,
+    Json(body): Json<CreateTag>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let tag = tokio::task::spawn_blocking(move || db.create_tag(&body.name, body.color.as_deref()))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(json!(tag)))
+}
+
+async fn delete_tag(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.clone();
+    let removed = tokio::task::spawn_blocking(move || db.delete_tag(id))
+        .await
+        .map_err(ApiError::internal)??;
+    if !removed {
+        return Err(ApiError::not_found("tag not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct TagLink {
+    tag_id: i64,
+}
+
+async fn add_item_tag(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<TagLink>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let item_id = id.clone();
+    tokio::task::spawn_blocking(move || db.add_item_tag(&item_id, body.tag_id))
+        .await
+        .map_err(ApiError::internal)??;
+    let item = fetch_item(&state, &id).await?;
+    Ok(Json(item_dto(&state, &item)))
+}
+
+async fn remove_item_tag(
+    State(state): State<AppState>,
+    AxumPath((id, tag_id)): AxumPath<(String, i64)>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let item_id = id.clone();
+    tokio::task::spawn_blocking(move || db.remove_item_tag(&item_id, tag_id))
+        .await
+        .map_err(ApiError::internal)??;
+    let item = fetch_item(&state, &id).await?;
+    Ok(Json(item_dto(&state, &item)))
+}
+
+async fn list_albums(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let albums = tokio::task::spawn_blocking(move || db.list_albums())
+        .await
+        .map_err(ApiError::internal)??;
+    let albums: Vec<Value> = albums
+        .iter()
+        .map(|album| album_json(&state, album))
+        .collect();
+    Ok(Json(json!({ "albums": albums })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateAlbum {
+    name: String,
+    description: Option<String>,
+}
+
+async fn create_album(
+    State(state): State<AppState>,
+    Json(body): Json<CreateAlbum>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let album = tokio::task::spawn_blocking(move || {
+        db.create_album(&body.name, body.description.as_deref())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    Ok(Json(album_json(&state, &album)))
+}
+
+async fn get_album(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db.clone();
+    let album = tokio::task::spawn_blocking(move || db.get_album(&id))
+        .await
+        .map_err(ApiError::internal)??;
+    album
+        .map(|album| Json(album_json(&state, &album)))
+        .ok_or_else(|| ApiError::not_found("album not found"))
+}
+
+async fn delete_album(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.clone();
+    let removed = tokio::task::spawn_blocking(move || db.delete_album(&id))
+        .await
+        .map_err(ApiError::internal)??;
+    if !removed {
+        return Err(ApiError::not_found("album not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn album_items(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<Value>, ApiError> {
+    let query = ItemQuery {
+        library_id: params.library,
+        kind: params.kind,
+        q: params.q,
+        favorite: params.favorite,
+        tag: params.tag,
+        album_id: Some(id),
+        from: params.from,
+        to: params.to,
+        cursor: params.cursor,
+        limit: params.limit.unwrap_or(200),
+    };
+    let db = state.db.clone();
+    let (items, next_cursor) = tokio::task::spawn_blocking(move || db.list_items(&query))
+        .await
+        .map_err(ApiError::internal)??;
+    let items: Vec<Value> = items.iter().map(|item| item_dto(&state, item)).collect();
+    Ok(Json(json!({ "items": items, "next_cursor": next_cursor })))
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumItemLink {
+    item_id: String,
+}
+
+async fn add_album_item(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<AlbumItemLink>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.clone();
+    let album_id = id.clone();
+    let item_id = body.item_id;
+    tokio::task::spawn_blocking(move || db.add_album_item(&album_id, &item_id))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_album_item(
+    State(state): State<AppState>,
+    AxumPath((id, item_id)): AxumPath<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || db.remove_album_item(&id, &item_id))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct UploadParams {
+    overwrite: Option<bool>,
+}
+
+async fn upload(
+    State(state): State<AppState>,
+    Query(params): Query<UploadParams>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, ApiError> {
+    write_enabled_check(&state)?;
+
+    let mut library_id: Option<String> = None;
+    let mut subdir: Option<String> = None;
+    let mut file_name: Option<String> = None;
+    let mut temp: Option<PathBuf> = None;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?
+    {
+        match field.name() {
+            Some("library") => {
+                library_id = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|error| ApiError::bad_request(error.to_string()))?,
+                );
+            }
+            Some("subdir") => {
+                subdir = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|error| ApiError::bad_request(error.to_string()))?,
+                );
+            }
+            Some("file") => {
+                file_name = field.file_name().map(ToOwned::to_owned);
+                let tmp = state
+                    .config
+                    .tmp_dir()
+                    .join(format!(".upload-{}", uuid::Uuid::now_v7()));
+                tokio::fs::create_dir_all(state.config.tmp_dir())
+                    .await
+                    .map_err(ApiError::internal)?;
+                let mut out = tokio::fs::File::create(&tmp)
+                    .await
+                    .map_err(ApiError::internal)?;
+                let mut written: u64 = 0;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|error| ApiError::bad_request(error.to_string()))?
+                {
+                    written += chunk.len() as u64;
+                    if written > state.config.write.max_upload_bytes {
+                        let _ = tokio::fs::remove_file(&tmp).await;
+                        return Err(ApiError::bad_request("upload exceeds max_upload_bytes"));
+                    }
+                    out.write_all(&chunk).await.map_err(ApiError::internal)?;
+                }
+                out.flush().await.map_err(ApiError::internal)?;
+                temp = Some(tmp);
+            }
+            _ => {}
+        }
+    }
+
+    let library = writable_library(
+        &state,
+        library_id
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("missing multipart field: library"))?,
+    )?;
+    let file_name = file_name
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("missing multipart file"))?;
+    let temp = temp.ok_or_else(|| ApiError::bad_request("empty upload"))?;
+
+    let safe_name = sanitize_file_name(file_name)?;
+    let mut rel_path = safe_name.clone();
+    if let Some(subdir) = subdir.as_deref().filter(|value| !value.trim().is_empty()) {
+        let clean = sanitize_subdir(subdir)?;
+        rel_path = format!("{clean}/{safe_name}");
+    }
+    if util::is_supported_path(Path::new(&rel_path)).is_none() {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(ApiError::bad_request("unsupported media extension"));
+    }
+
+    let root = PathBuf::from(&library.path);
+    let target = root.join(&rel_path);
+    if target.exists() && !params.overwrite.unwrap_or(false) {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(ApiError::conflict("file already exists"));
+    }
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+
+    let staging = root.join(format!(".upload-staging-{}", uuid::Uuid::now_v7()));
+    tokio::fs::copy(&temp, &staging)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = tokio::fs::remove_file(&temp).await;
+    if target.exists() && params.overwrite.unwrap_or(false) {
+        tokio::fs::remove_file(&target)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    tokio::fs::rename(&staging, &target)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let config = state.config.clone();
+    let db = state.db.clone();
+    let scan_path = target.clone();
+    let scan_rel = rel_path.clone();
+    let lib = library.to_library();
+    let item = tokio::task::spawn_blocking(move || {
+        scan::scan_file(&config, &db, &lib, &scan_path, &scan_rel)
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    Ok(Json(item_dto(&state, &item)))
+}
+
+fn write_enabled_check(state: &AppState) -> Result<(), ApiError> {
+    write_allowed(state)
+}
+
+fn sanitize_file_name(name: &str) -> Result<String, ApiError> {
+    let path = Path::new(name);
+    if path.components().count() != 1
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(ApiError::bad_request("invalid file name"));
+    }
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(ApiError::bad_request("invalid file name"));
+    }
+    Ok(name.to_string())
+}
+
+fn sanitize_subdir(value: &str) -> Result<String, ApiError> {
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(ApiError::bad_request("invalid subdir"));
+    }
+    Ok(value.trim_matches('/').to_string())
+}
+
+async fn delete_item(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let item = fetch_item(&state, &id).await?;
+    let library = writable_library(&state, &item.library_id)?;
+    if !state.config.trash.enabled {
+        return Err(ApiError::forbidden("trash is disabled"));
+    }
+    let source = media_path(&state, &item)?;
+    let trash_id = uuid::Uuid::now_v7().to_string();
+    let trash_dir = state.config.trash_dir().join(&library.id);
+    tokio::fs::create_dir_all(&trash_dir)
+        .await
+        .map_err(ApiError::internal)?;
+    let filename = item.filename().to_string();
+    let trash_path = trash_dir.join(format!(
+        "{}-{}",
+        &trash_id[..8],
+        filename.replace(['/', '\\'], "_")
+    ));
+    let source_copy = source.clone();
+    let trash_copy = trash_path.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        std::fs::copy(&source_copy, &trash_copy)?;
+        std::fs::remove_file(&source_copy)?;
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+
+    let deleted_at = util::mtime_to_utc(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_secs() as i64)
+            .unwrap_or(0),
+    );
+    let entry = TrashEntry {
+        id: trash_id.clone(),
+        item_id: item.id.clone(),
+        library_id: library.id.clone(),
+        rel_path: item.rel_path.clone(),
+        filename,
+        trash_path: trash_path.to_string_lossy().to_string(),
+        deleted_at,
+    };
+    let db = state.db.clone();
+    let item_id = item.id.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        db.add_trash(&entry)?;
+        db.set_missing(&item_id, true)?;
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+
+    Ok(Json(json!({ "trash_id": trash_id })))
+}
+
+async fn list_trash(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    if !state.config.trash.enabled {
+        return Ok(Json(json!({ "entries": [] })));
+    }
+    let db = state.db.clone();
+    let entries = tokio::task::spawn_blocking(move || db.list_trash())
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+async fn restore_trash(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    write_allowed(&state)?;
+    let db = state.db.clone();
+    let entry = tokio::task::spawn_blocking(move || db.get_trash(&id))
+        .await
+        .map_err(ApiError::internal)??
+        .ok_or_else(|| ApiError::not_found("trash entry not found"))?;
+    let library = library_config(&state, &entry.library_id)?;
+    let target = PathBuf::from(&library.path).join(&entry.rel_path);
+    if target.exists() {
+        return Err(ApiError::conflict("target path already exists"));
+    }
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(ApiError::internal)?;
+    }
+    let trash_path = PathBuf::from(&entry.trash_path);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        std::fs::copy(&trash_path, &target)?;
+        std::fs::remove_file(&trash_path)?;
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    let db = state.db.clone();
+    let item_id = entry.item_id.clone();
+    let trash_id = entry.id.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        db.set_missing(&item_id, false)?;
+        db.delete_trash_row(&trash_id)?;
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn purge_trash(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<StatusCode, ApiError> {
+    write_allowed(&state)?;
+    let db = state.db.clone();
+    let entry = tokio::task::spawn_blocking(move || db.get_trash(&id))
+        .await
+        .map_err(ApiError::internal)??
+        .ok_or_else(|| ApiError::not_found("trash entry not found"))?;
+    let trash_path = PathBuf::from(&entry.trash_path);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if trash_path.exists() {
+            std::fs::remove_file(&trash_path)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
+    let db = state.db.clone();
+    let trash_id = entry.id.clone();
+    tokio::task::spawn_blocking(move || db.delete_trash_row(&trash_id))
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn transcode_item(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !state.config.video.transcode_enabled {
+        return Err(ApiError::forbidden("video transcoding is disabled"));
+    }
+    let item = fetch_item(&state, &id).await?;
+    if item.kind != MediaKind::Video {
+        return Err(ApiError::bad_request("only videos can be transcoded"));
+    }
+    let output = state
+        .config
+        .cache_dir()
+        .join("derived")
+        .join(format!("{}-web.mp4", item.cache_key()));
+    if output.is_file() {
+        let db = state.db.clone();
+        let item_id = item.id.clone();
+        let path = output.to_string_lossy().to_string();
+        tokio::task::spawn_blocking(move || db.set_derivative(&item_id, "web", &path))
+            .await
+            .map_err(ApiError::internal)??;
+        return Ok(Json(json!({ "ready": true, "job_id": null })));
+    }
+
+    let source = media_path(&state, &item)?;
+    let job_id = state.db.create_job("transcode")?;
+    let db = state.db.clone();
+    let config = state.config.clone();
+    let sem = state.transcode_sem.clone();
+    let job = job_id.clone();
+    tokio::spawn(async move {
+        let permit = match sem.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
+        let _permit = permit;
+        let _ = db.update_job(&job, "running", 0, 1, Some("transcoding"), None);
+        let item_id = item.id.clone();
+        let output_for_task = output.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            video::transcode(&source, &output_for_task, &config.ffmpeg, &config.video)
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                let path = output.to_string_lossy().to_string();
+                let _ = db.set_derivative(&item_id, "web", &path);
+                let _ = db.update_job(&job, "completed", 1, 1, Some("web version ready"), None);
+            }
+            Ok(Err(error)) => {
+                let _ = db.update_job(
+                    &job,
+                    "failed",
+                    0,
+                    1,
+                    Some("transcode failed"),
+                    Some(&error.to_string()),
+                );
+            }
+            Err(error) => {
+                let _ = db.update_job(
+                    &job,
+                    "failed",
+                    0,
+                    1,
+                    Some("transcode task failed"),
+                    Some(&error.to_string()),
+                );
+            }
+        }
+    });
+    Ok(Json(json!({ "ready": false, "job_id": job_id })))
+}
+
+async fn get_derived(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let item = fetch_item(&state, &id).await?;
+    let db = state.db.clone();
+    let item_id = item.id.clone();
+    let path = tokio::task::spawn_blocking(move || db.get_derivative(&item_id, "web"))
+        .await
+        .map_err(ApiError::internal)??
+        .ok_or_else(|| ApiError::not_found("web version not generated"))?;
+    serve_file(PathBuf::from(path), headers).await
+}
+
 async fn scan_handler(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let job_id = start_scan(state, None).map_err(|error| {
         if error.to_string().contains("already") {
@@ -398,6 +1066,17 @@ fn item_dto(state: &AppState, item: &MediaItem) -> Value {
 
     let thumbnail_url = thumb_url(state, item, size);
     let media_url = media_url(state, item);
+    let tags = state.db.tags_for_item(&item.id).unwrap_or_default();
+    let play_url = if item.kind == MediaKind::Video {
+        state
+            .db
+            .get_derivative(&item.id, "web")
+            .ok()
+            .flatten()
+            .map(|_| format!("/api/v1/items/{}/derived", item.id))
+    } else {
+        None
+    };
     // Images are shown in the lightbox through a large JPEG thumbnail so that
     // formats the browser cannot decode (e.g. HEIC) still display when a
     // sidecar preview exists. Videos keep the original media URL.
@@ -424,6 +1103,8 @@ fn item_dto(state: &AppState, item: &MediaItem) -> Value {
         "thumb_url": thumbnail_url,
         "media_url": media_url,
         "preview_url": preview_url,
+        "play_url": play_url,
+        "tags": tags,
     })
 }
 

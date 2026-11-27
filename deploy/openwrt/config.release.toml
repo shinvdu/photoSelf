@@ -42,6 +42,9 @@ timeout_seconds = 120
 poster_enabled = true
 transcode_enabled = false
 max_height = 1080
+transcode_concurrency = 1
+transcode_max_width = 1280
+transcode_crf = 23
 
 [auth]
 mode = "none"
@@ -58,6 +61,10 @@ probe_videos = true
 [trash]
 enabled = false
 retention_days = 30
+
+[write]
+enabled = false
+max_upload_bytes = 536870912
 
 [logging]
 level = "info"

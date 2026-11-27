@@ -21,7 +21,9 @@
 | 区域 | 作用 |
 |---|---|
 | 时间线 | 按天分组的网格、懒加载缩略图、无限滚动 |
-| 搜索 | 文件名搜索（`q` 参数） |
+| Albums | 创建相册、增删条目、封面视图 |
+| Trash | 恢复或永久删除回收站条目 |
+| 搜索/标签 | 文件名与标签筛选 |
 | 收藏 | 只看已收藏条目 |
 | 扫描 | 启动后台扫描任务并显示进度 |
 | 灯箱 | 大图预览（1280 JPEG）、视频播放、元数据、下载 |
@@ -131,6 +133,33 @@ sidecar_dir = "/mnt/usb/photo-app/sidecars"
 - 导入新的 HEIC/HEVC 素材后重跑；`--meta-only` 只补元数据；已有预览默认跳过，
   加 `--force` 强制重生成。
 
+## 标签、相册、上传与回收站
+
+- **标签**：打开条目，在灯箱里输入/选择标签，顶部可按标签筛选。
+  `POST /api/v1/tags` 创建标签；`POST /api/v1/items/{id}/tags` 挂载。
+- **相册**：切到 **Albums** 创建相册，在灯箱中把当前条目加入相册。
+  相册只是虚拟关系，不移动文件。
+- **上传**：`[write] enabled = true` 且库可写时，点击 **Upload** 选择图片/视频。
+  服务端先写临时文件，随后立即索引。
+- **删除/回收站**：灯箱的 **Delete** 会把文件移到
+  `<data.dir>/trash/<library-id>/` 并把行标记为 missing。打开 **Trash** 恢复
+  或永久删除。
+- **搜索过滤**：文件名、收藏、标签过滤作用于时间线；API 还支持
+  `kind`、`library`、`from`、`to`、`album`。
+
+## 网页版视频
+
+设置 `video.transcode_enabled = true`，并确保 `ffmpeg` 带 `libx264` 和 `aac`。
+在灯箱中点击 **Generate web version**；服务端会在 `data/cache/derived/` 排队生成，
+并返回 `play_url`（H.264/AAC MP4）。
+
+## 定时扫描与 PWA
+
+- `scan.interval = "15m"` 每 15 分钟后台扫描一次。支持 `s`、`m`、`h`、`d`；
+  `"0"` 关闭。
+- UI 带 PWA manifest 和 service worker。用 Chrome/Edge（HTTPS 或 localhost）
+  安装后可独立窗口打开，并缓存应用壳。
+
 ## 认证
 
 `auth.mode = "none"` 只适合可信局域网。单管理员：
@@ -194,10 +223,12 @@ concurrency = 1
 
 ## 已知行为与限制
 
-- 标签、相册、上传/删除、回收站、分享链接尚未实现。
-- 视频按原文件播放；MOV/HEVC 兼容性取决于浏览器（Safari/Apple 通常可以，
-  Chrome/Firefox 可能不行）。
+- 写入模式默认关闭；开启后 API 可以修改照片库。
+- 回收站不会自动过期，需要手动清除旧条目。
+- 视频默认播放原文件；生成 web MP4 后才能在所有浏览器播放。MOV/HEVC 兼容性
+  取决于浏览器（Safari/Apple 通常可以，Chrome/Firefox 可能不行）。
 - HEIC 可以索引并通过 sidecar 预览；原文件仍是 HEIC。
 - 无时区 EXIF 日期按本地裸时间存储。
 - 搜索是对文件名做 `LIKE`，不是全文搜索。
 - UI 目前把所有库混在一条时间线里；按库筛选在计划中。
+- 标签/相册只是元数据，不会自动整理文件。
