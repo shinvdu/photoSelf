@@ -61,6 +61,8 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - Background web-MP4 transcoding queue with job status (`play_url`)
 - PWA / installable offline shell
 - Multilingual UI (Simplified Chinese and English, Chinese by default)
+- Lightbox zoom/pan (wheel, pinch, double-tap, buttons) with original-resolution
+  loading; portrait phones get a collapsible metadata sheet and swipe navigation
 - `none` / `basic` / `proxy` authentication
 - Standalone mode (Rust serves API, media and UI) or reverse-proxy mode
 - Embedded-UI release build (optional feature)

@@ -77,6 +77,11 @@ export default {
     transcodeRunning: 'Transcoding…',
     transcodeReady: 'Web version ready',
     transcodeFailed: 'Transcode failed',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    resetZoom: 'Reset zoom',
+    showInfo: 'Show info',
+    hideInfo: 'Hide info',
   },
   date: {
     undated: 'Undated',

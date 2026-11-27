@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-11-27
+
+- Lightbox zoom: mouse wheel, pinch, double-tap/double-click, on-screen
+  controls and the `+`/`-`/`0` keys. Drag to pan while zoomed; the original
+  file is layered in above ~125% so zoomed detail stays sharp.
+- Portrait phones: metadata now lives in a collapsible bottom sheet that is
+  collapsed by default, leaving the photo full-height. Swipe left/right to
+  move between photos; the sheet shows the same tags/albums/actions.
+- Desktop keeps the side metadata panel; zoom is clipped to the viewer so it
+  never covers the panel or navigation arrows.
+
 ## 0.3.0 — 2026-11-27
 
 - Multilingual UI: Simplified Chinese and English, Chinese by default.

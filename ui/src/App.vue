@@ -45,6 +45,23 @@ const videoError = ref(false)
 const fileInput = ref(null)
 const newAlbumName = ref('')
 
+const zoomStage = ref(null)
+const zoom = ref(1)
+const panX = ref(0)
+const panY = ref(0)
+const dragging = ref(false)
+const hiResLoaded = ref(false)
+const metaOpen = ref(
+  typeof window === 'undefined' || !window.matchMedia
+    ? true
+    : !window.matchMedia('(max-width: 860px)').matches,
+)
+const pointers = new Map()
+let dragState = null
+let pinchState = null
+let lastTap = { time: 0, x: 0, y: 0 }
+let suppressDblClickUntil = 0
+
 let observer = null
 let scanTimer = null
 let transcodeTimer = null
@@ -251,7 +268,164 @@ function formatBytes(bytes) {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[index]}`
 }
 
+const isZoomed = computed(() => zoom.value > 1.001)
+const zoomPercent = computed(() => `${Math.round(zoom.value * 100)}%`)
+const zoomStyle = computed(() => ({
+  transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+  transition: dragging.value ? 'none' : 'transform 150ms ease',
+}))
+const showHiRes = computed(() => isZoomed.value && Boolean(selected.value?.media_url))
+
+function clampPan(x, y, scale = zoom.value) {
+  const el = zoomStage.value
+  if (!el) return { x: 0, y: 0 }
+  const maxX = Math.max(0, (el.offsetWidth * (scale - 1)) / 2)
+  const maxY = Math.max(0, (el.offsetHeight * (scale - 1)) / 2)
+  return {
+    x: Math.min(maxX, Math.max(-maxX, x)),
+    y: Math.min(maxY, Math.max(-maxY, y)),
+  }
+}
+
+function applyZoom(nextScale, clientX, clientY) {
+  const scale = Math.min(5, Math.max(1, nextScale))
+  if (scale === 1) {
+    resetZoom()
+    return
+  }
+  const el = zoomStage.value
+  const rect = el?.getBoundingClientRect()
+  const originX = clientX != null && rect ? clientX - (rect.left + rect.width / 2) : 0
+  const originY = clientY != null && rect ? clientY - (rect.top + rect.height / 2) : 0
+  const ratio = scale / zoom.value
+  const next = clampPan(
+    panX.value * ratio + originX * (1 - ratio),
+    panY.value * ratio + originY * (1 - ratio),
+    scale,
+  )
+  zoom.value = scale
+  panX.value = next.x
+  panY.value = next.y
+}
+
+function resetZoom() {
+  zoom.value = 1
+  panX.value = 0
+  panY.value = 0
+  hiResLoaded.value = false
+}
+
+function zoomBy(factor) {
+  const rect = zoomStage.value?.getBoundingClientRect()
+  applyZoom(
+    zoom.value * factor,
+    rect ? rect.left + rect.width / 2 : null,
+    rect ? rect.top + rect.height / 2 : null,
+  )
+}
+
+function onWheel(event) {
+  if (selected.value?.kind === 'video') return
+  applyZoom(zoom.value * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY)
+}
+
+function onDoubleClick(event) {
+  if (performance.now() < suppressDblClickUntil) return
+  if (isZoomed.value) resetZoom()
+  else applyZoom(2.5, event.clientX, event.clientY)
+}
+
+function onPointerDown(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  try {
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  } catch {
+    // synthetic events may reference an unknown pointer id
+  }
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()]
+    pinchState = { distance: Math.hypot(a.x - b.x, a.y - b.y), zoom: zoom.value }
+    dragState = null
+    dragging.value = true
+    return
+  }
+  if (pointers.size === 1) {
+    dragState = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: panX.value,
+      originY: panY.value,
+      pointerType: event.pointerType,
+      moved: false,
+    }
+    dragging.value = true
+  }
+}
+
+function onPointerMove(event) {
+  if (!pointers.has(event.pointerId)) return
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (pointers.size >= 2 && pinchState) {
+    const [a, b] = [...pointers.values()]
+    const distance = Math.hypot(a.x - b.x, a.y - b.y)
+    if (pinchState.distance > 0) {
+      applyZoom(
+        pinchState.zoom * (distance / pinchState.distance),
+        (a.x + b.x) / 2,
+        (a.y + b.y) / 2,
+      )
+    }
+    return
+  }
+  if (!dragState) return
+  const dx = event.clientX - dragState.startX
+  const dy = event.clientY - dragState.startY
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragState.moved = true
+  if (isZoomed.value) {
+    const next = clampPan(dragState.originX + dx, dragState.originY + dy)
+    panX.value = next.x
+    panY.value = next.y
+  }
+}
+
+function onPointerUp(event) {
+  pointers.delete(event.pointerId)
+  if (pointers.size < 2) pinchState = null
+  if (pointers.size > 0) return
+  if (dragState?.pointerType === 'touch' && !dragState.moved) {
+    const now = performance.now()
+    const dx = event.clientX - lastTap.x
+    const dy = event.clientY - lastTap.y
+    if (now - lastTap.time < 320 && Math.hypot(dx, dy) < 30) {
+      lastTap = { time: 0, x: 0, y: 0 }
+      suppressDblClickUntil = now + 500
+      if (isZoomed.value) resetZoom()
+      else applyZoom(2.5, event.clientX, event.clientY)
+    } else {
+      lastTap = { time: now, x: event.clientX, y: event.clientY }
+    }
+  } else if (dragState?.pointerType === 'touch') {
+    lastTap = { time: 0, x: 0, y: 0 }
+  }
+  if (!isZoomed.value && dragState?.moved && dragState.pointerType === 'touch') {
+    const dx = event.clientX - dragState.startX
+    const dy = event.clientY - dragState.startY
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      if (dx < 0) next()
+      else prev()
+    }
+  }
+  dragState = null
+  dragging.value = false
+}
+
+function toggleMeta() {
+  metaOpen.value = !metaOpen.value
+}
+
 function openItem(item) {
+  resetZoom()
   selected.value = item
   videoError.value = false
   transcodeStatus.value = ''
@@ -574,12 +748,27 @@ watch(locale, (value) => {
 function onKey(event) {
   if (event.key === 'Escape') close()
   if (!selected.value) return
+  if (selected.value.kind !== 'video') {
+    if (event.key === '+' || event.key === '=') {
+      zoomBy(1.25)
+      return
+    }
+    if (event.key === '-' || event.key === '_') {
+      zoomBy(0.8)
+      return
+    }
+    if (event.key === '0') {
+      resetZoom()
+      return
+    }
+  }
   if (event.key === 'ArrowLeft') prev()
   if (event.key === 'ArrowRight') next()
 }
 
 watch(selected, (value) => {
   document.body.classList.toggle('modal-open', Boolean(value))
+  resetZoom()
   videoError.value = false
   transcodeStatus.value = ''
   addTagId.value = ''
@@ -803,11 +992,36 @@ onUnmounted(() => {
     <button class="nav prev" type="button" :aria-label="t('actions.previous')" @click.stop="prev">‹</button>
 
     <div class="viewer">
-      <img
+      <div
         v-if="selected.kind !== 'video'"
-        :src="selected.preview_url || selected.media_url"
-        :alt="selected.filename"
-      />
+        ref="zoomStage"
+        class="zoom-stage"
+        :class="{ 'is-zoomed': isZoomed }"
+        :style="zoomStyle"
+        @wheel.prevent="onWheel"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+        @dblclick="onDoubleClick"
+      >
+        <img
+          :src="selected.preview_url || selected.media_url"
+          :alt="selected.filename"
+          draggable="false"
+          @error="onImgError"
+        />
+        <img
+          v-if="showHiRes"
+          class="hi-res"
+          :class="{ loaded: hiResLoaded }"
+          :src="selected.media_url"
+          alt=""
+          draggable="false"
+          @load="hiResLoaded = true"
+          @error="hiResLoaded = false"
+        />
+      </div>
       <template v-else>
         <video
           :src="selected.play_url || selected.media_url"
@@ -822,78 +1036,103 @@ onUnmounted(() => {
           <span v-if="info && info.transcode_enabled">{{ t('lightbox.orGenerate') }}</span>
         </div>
       </template>
+
+      <div v-if="selected.kind !== 'video'" class="zoom-controls">
+        <button type="button" :aria-label="t('lightbox.zoomOut')" @click="zoomBy(0.8)">−</button>
+        <button
+          type="button"
+          class="zoom-value"
+          :title="t('lightbox.resetZoom')"
+          @click="resetZoom"
+        >
+          {{ zoomPercent }}
+        </button>
+        <button type="button" :aria-label="t('lightbox.zoomIn')" @click="zoomBy(1.25)">+</button>
+      </div>
     </div>
 
     <button class="nav next" type="button" :aria-label="t('actions.next')" @click.stop="next">›</button>
 
-    <aside class="meta">
-      <h3>{{ selected.filename }}</h3>
-      <dl>
-        <div><dt>{{ t('lightbox.date') }}</dt><dd>{{ formatDate(selected.taken_at) }}</dd></div>
-        <div v-if="selected.width">
-          <dt>{{ t('lightbox.dimensions') }}</dt><dd>{{ selected.width }} × {{ selected.height }}</dd>
-        </div>
-        <div v-if="selected.duration_ms">
-          <dt>{{ t('lightbox.duration') }}</dt><dd>{{ formatDuration(selected.duration_ms) }}</dd>
-        </div>
-        <div v-if="selected.camera"><dt>{{ t('lightbox.camera') }}</dt><dd>{{ selected.camera }}</dd></div>
-        <div><dt>{{ t('lightbox.size') }}</dt><dd>{{ formatBytes(selected.size) }}</dd></div>
-      </dl>
+    <aside class="meta" :class="{ open: metaOpen }">
+      <button
+        type="button"
+        class="meta-handle"
+        :aria-expanded="metaOpen"
+        :title="metaOpen ? t('lightbox.hideInfo') : t('lightbox.showInfo')"
+        @click="toggleMeta"
+      >
+        <span class="meta-title">{{ selected.filename }}</span>
+        <span class="meta-chevron" aria-hidden="true">{{ metaOpen ? '▾' : '▴' }}</span>
+      </button>
+      <div class="meta-body">
+        <h3>{{ selected.filename }}</h3>
+        <dl>
+          <div><dt>{{ t('lightbox.date') }}</dt><dd>{{ formatDate(selected.taken_at) }}</dd></div>
+          <div v-if="selected.width">
+            <dt>{{ t('lightbox.dimensions') }}</dt><dd>{{ selected.width }} × {{ selected.height }}</dd>
+          </div>
+          <div v-if="selected.duration_ms">
+            <dt>{{ t('lightbox.duration') }}</dt><dd>{{ formatDuration(selected.duration_ms) }}</dd>
+          </div>
+          <div v-if="selected.camera"><dt>{{ t('lightbox.camera') }}</dt><dd>{{ selected.camera }}</dd></div>
+          <div><dt>{{ t('lightbox.size') }}</dt><dd>{{ formatBytes(selected.size) }}</dd></div>
+        </dl>
 
-      <div class="tags">
-        <span v-for="tag in selected.tags || []" :key="tag.id" class="tag-chip">
-          {{ tag.name }}
-          <button type="button" @click="detachTag(tag.id)">×</button>
-        </span>
-      </div>
-      <div class="tag-add">
-        <select v-model="addTagId">
-          <option value="">{{ t('lightbox.addTag') }}</option>
-          <option v-for="tag in tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
-        </select>
-        <button type="button" :disabled="!addTagId" @click="attachTag(addTagId)">+</button>
-        <input v-model="newTagName" :placeholder="t('lightbox.newTag')" @keyup.enter="createAndAttachTag" />
-        <button type="button" @click="createAndAttachTag">{{ t('lightbox.create') }}</button>
-      </div>
+        <div class="tags">
+          <span v-for="tag in selected.tags || []" :key="tag.id" class="tag-chip">
+            {{ tag.name }}
+            <button type="button" @click="detachTag(tag.id)">×</button>
+          </span>
+        </div>
+        <div class="tag-add">
+          <select v-model="addTagId">
+            <option value="">{{ t('lightbox.addTag') }}</option>
+            <option v-for="tag in tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
+          </select>
+          <button type="button" :disabled="!addTagId" @click="attachTag(addTagId)">+</button>
+          <input v-model="newTagName" :placeholder="t('lightbox.newTag')" @keyup.enter="createAndAttachTag" />
+          <button type="button" @click="createAndAttachTag">{{ t('lightbox.create') }}</button>
+        </div>
 
-      <div v-if="albums.length" class="tag-add">
-        <select v-model="addAlbumId">
-          <option value="">{{ t('lightbox.addToAlbum') }}</option>
-          <option
-            v-for="album in albums"
-            :key="album.id"
-            :value="album.id"
-            :disabled="activeAlbum && activeAlbum.id === album.id"
+        <div v-if="albums.length" class="tag-add">
+          <select v-model="addAlbumId">
+            <option value="">{{ t('lightbox.addToAlbum') }}</option>
+            <option
+              v-for="album in albums"
+              :key="album.id"
+              :value="album.id"
+              :disabled="activeAlbum && activeAlbum.id === album.id"
+            >
+              {{ album.name }}
+            </option>
+          </select>
+          <button type="button" :disabled="!addAlbumId" @click="addSelectedToAlbum">{{ t('lightbox.add') }}</button>
+          <button v-if="activeAlbum" type="button" @click="removeSelectedFromAlbum">{{ t('lightbox.remove') }}</button>
+        </div>
+
+        <div class="row">
+          <button type="button" @click="toggleFavorite(selected)">
+            {{ selected.favorite ? t('lightbox.unfavorite') : t('lightbox.favorite') }}
+          </button>
+          <a :href="selected.media_url" :download="selected.filename">{{ t('lightbox.download') }}</a>
+          <button
+            v-if="selected.kind === 'video' && info && info.transcode_enabled && !selected.play_url"
+            type="button"
+            @click="transcodeSelected"
           >
-            {{ album.name }}
-          </option>
-        </select>
-        <button type="button" :disabled="!addAlbumId" @click="addSelectedToAlbum">{{ t('lightbox.add') }}</button>
-        <button v-if="activeAlbum" type="button" @click="removeSelectedFromAlbum">{{ t('lightbox.remove') }}</button>
+            {{ t('lightbox.generateWeb') }}
+          </button>
+          <button
+            v-if="canDeleteSelected"
+            type="button"
+            class="danger"
+            @click="deleteSelected"
+          >
+            {{ t('lightbox.delete') }}
+          </button>
+        </div>
+        <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
       </div>
-
-      <div class="row">
-        <button type="button" @click="toggleFavorite(selected)">
-          {{ selected.favorite ? t('lightbox.unfavorite') : t('lightbox.favorite') }}
-        </button>
-        <a :href="selected.media_url" :download="selected.filename">{{ t('lightbox.download') }}</a>
-        <button
-          v-if="selected.kind === 'video' && info && info.transcode_enabled && !selected.play_url"
-          type="button"
-          @click="transcodeSelected"
-        >
-          {{ t('lightbox.generateWeb') }}
-        </button>
-        <button
-          v-if="canDeleteSelected"
-          type="button"
-          class="danger"
-          @click="deleteSelected"
-        >
-          {{ t('lightbox.delete') }}
-        </button>
-      </div>
-      <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
     </aside>
   </div>
 </template>

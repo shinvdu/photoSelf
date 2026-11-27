@@ -77,6 +77,11 @@ export default {
     transcodeRunning: '正在转码…',
     transcodeReady: '网页版已就绪',
     transcodeFailed: '转码失败',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    resetZoom: '重置缩放',
+    showInfo: '展开信息',
+    hideInfo: '收起信息',
   },
   date: {
     undated: '日期未知',
