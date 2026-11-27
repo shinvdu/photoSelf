@@ -65,6 +65,8 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - Lightbox zoom/pan (wheel, pinch, double-tap, buttons) with original-resolution
   loading; portrait screens get a collapsible bottom sheet for metadata/actions
 - Pastel light and dark themes (system-aware on first visit, toggle in the header)
+- Thumbnail context menu (right-click / long-press) and multi-select batch actions:
+  view, download, add to album, delete
 - Optional UI library manager: add/disable/remove directories, trigger per-library
   scans, and browse the server filesystem inside a configured allow-list
 - `none` / `basic` / `proxy` authentication

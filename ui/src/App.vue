@@ -71,6 +71,16 @@ const browser = ref(null)
 const browserLoading = ref(false)
 const toast = ref(null)
 
+const selectionMode = ref(false)
+const selectedIds = ref([])
+const contextMenu = ref(null)
+const showAlbumPicker = ref(false)
+const batchBusy = ref(false)
+
+let lastSelectedId = null
+let tilePressTimer = null
+let suppressTileClick = false
+
 let toastTimer = null
 
 const zoomStage = ref(null)
@@ -344,12 +354,14 @@ function reloadCurrent() {
 }
 
 function search() {
+  clearSelection()
   view.value = 'timeline'
   activeAlbum.value = null
   reloadCurrent()
 }
 
 function switchView(next) {
+  clearSelection()
   view.value = next
   selected.value = null
   activeAlbum.value = null
@@ -360,6 +372,7 @@ function switchView(next) {
 }
 
 function openAlbum(album) {
+  clearSelection()
   activeAlbum.value = album
   view.value = 'album'
   selected.value = null
@@ -389,6 +402,33 @@ const canDeleteSelected = computed(() => {
 
 const currentItems = computed(() =>
   view.value === 'album' ? albumItems.value : items.value,
+)
+
+const writableLibraryIds = computed(
+  () =>
+    new Set(
+      (info.value?.libraries || [])
+        .filter((library) => !library.read_only)
+        .map((library) => library.id),
+    ),
+)
+
+const selectionActive = computed(
+  () => selectionMode.value || selectedIds.value.length > 0,
+)
+
+const selectedItems = computed(() =>
+  currentItems.value.filter((item) => selectedIds.value.includes(item.id)),
+)
+
+const canDeleteSelection = computed(
+  () =>
+    Boolean(info.value?.write_enabled) &&
+    Boolean(info.value?.trash_enabled) &&
+    selectedItems.value.length > 0 &&
+    selectedItems.value.every((item) =>
+      writableLibraryIds.value.has(item.library_id),
+    ),
 )
 
 const groups = computed(() => groupsOf(currentItems.value))
@@ -626,6 +666,226 @@ function prev() {
 function next() {
   if (selectedIndex.value >= 0 && selectedIndex.value < currentItems.value.length - 1) {
     selected.value = currentItems.value[selectedIndex.value + 1]
+  }
+}
+
+function isSelected(id) {
+  return selectedIds.value.includes(id)
+}
+
+function clearSelection() {
+  selectedIds.value = []
+  selectionMode.value = false
+  contextMenu.value = null
+  showAlbumPicker.value = false
+  lastSelectedId = null
+}
+
+function toggleSelectionMode() {
+  if (selectionMode.value) clearSelection()
+  else {
+    selectionMode.value = true
+    selectedIds.value = []
+  }
+}
+
+function toggleSelect(item) {
+  const id = item.id
+  selectedIds.value = isSelected(id)
+    ? selectedIds.value.filter((value) => value !== id)
+    : [...selectedIds.value, id]
+  lastSelectedId = id
+}
+
+function handleTileClick(item, event) {
+  if (suppressTileClick) {
+    suppressTileClick = false
+    return
+  }
+  if (event.shiftKey && lastSelectedId) {
+    const list = currentItems.value
+    const from = list.findIndex((entry) => entry.id === lastSelectedId)
+    const to = list.findIndex((entry) => entry.id === item.id)
+    if (from >= 0 && to >= 0) {
+      const [start, end] = from < to ? [from, to] : [to, from]
+      const ids = new Set(selectedIds.value)
+      for (let index = start; index <= end; index += 1) ids.add(list[index].id)
+      selectedIds.value = [...ids]
+      selectionMode.value = true
+      return
+    }
+  }
+  if (event.metaKey || event.ctrlKey || selectionMode.value) {
+    selectionMode.value = true
+    toggleSelect(item)
+    return
+  }
+  openItem(item)
+}
+
+function openContextMenu(event, item) {
+  if (!isSelected(item.id)) {
+    selectedIds.value = [item.id]
+    selectionMode.value = true
+  }
+  lastSelectedId = item.id
+  const width = 216
+  const height = 224
+  contextMenu.value = {
+    item,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+  }
+}
+
+function closeContextMenu() {
+  contextMenu.value = null
+}
+
+function onTilePointerDown(event, item) {
+  if (event.pointerType !== 'touch') return
+  tilePressTimer = setTimeout(() => {
+    tilePressTimer = null
+    suppressTileClick = true
+    setTimeout(() => {
+      suppressTileClick = false
+    }, 800)
+    if (!isSelected(item.id)) {
+      selectedIds.value = [item.id]
+      selectionMode.value = true
+    }
+    openContextMenu(event, item)
+  }, 550)
+}
+
+function onTilePointerUp() {
+  if (tilePressTimer) {
+    clearTimeout(tilePressTimer)
+    tilePressTimer = null
+  }
+}
+
+function downloadItem(item) {
+  const link = document.createElement('a')
+  link.href = item.media_url
+  link.download = item.filename
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function downloadSelection() {
+  const list = selectedItems.value
+  if (!list.length) return
+  if (list.length > 1 && !confirm(t('batch.downloadConfirm', { count: list.length }))) {
+    return
+  }
+  list.forEach((item, index) => {
+    setTimeout(() => downloadItem(item), index * 300)
+  })
+  showToast(t('batch.downloading', { count: list.length }))
+}
+
+function viewSelection() {
+  const first = selectedItems.value[0]
+  if (first) openItem(first)
+}
+
+function openAlbumPicker() {
+  if (!albums.value.length) {
+    showToast(t('batch.noAlbums'), true)
+    return
+  }
+  showAlbumPicker.value = true
+}
+
+function closeAlbumPicker() {
+  if (batchBusy.value) return
+  showAlbumPicker.value = false
+}
+
+function contextView() {
+  const item = contextMenu.value?.item
+  closeContextMenu()
+  if (item) openItem(item)
+}
+
+function contextDownload() {
+  closeContextMenu()
+  downloadSelection()
+}
+
+function contextAlbum() {
+  closeContextMenu()
+  openAlbumPicker()
+}
+
+function contextDelete() {
+  closeContextMenu()
+  deleteSelection()
+}
+
+async function deleteSelection() {
+  const list = selectedItems.value
+  if (!list.length || batchBusy.value) return
+  if (!canDeleteSelection.value) {
+    showToast(t('batch.readOnly'), true)
+    return
+  }
+  if (!confirm(t('batch.deleteConfirm', { count: list.length }))) return
+  batchBusy.value = true
+  let done = 0
+  let failed = 0
+  let lastError = ''
+  for (const item of list) {
+    try {
+      await api(`${API}/items/${item.id}`, { method: 'DELETE' })
+      done += 1
+    } catch (err) {
+      failed += 1
+      lastError = err.message
+    }
+  }
+  batchBusy.value = false
+  clearSelection()
+  await Promise.all([loadInfo(), loadItems(true)])
+  if (view.value === 'album') await loadAlbumItems()
+  if (info.value?.trash_enabled) await loadTrash()
+  if (failed) {
+    showToast(t('batch.deleteFailed', { done, failed, message: lastError }), true)
+  } else {
+    showToast(t('batch.deleted', { done }))
+  }
+}
+
+async function addSelectionToAlbum(album) {
+  const list = selectedItems.value
+  if (!list.length || batchBusy.value) return
+  batchBusy.value = true
+  let done = 0
+  let failed = 0
+  let lastError = ''
+  for (const item of list) {
+    try {
+      await api(`${API}/albums/${album.id}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ item_id: item.id }),
+      })
+      done += 1
+    } catch (err) {
+      failed += 1
+      lastError = err.message
+    }
+  }
+  batchBusy.value = false
+  showAlbumPicker.value = false
+  await loadAlbums()
+  if (activeAlbum.value?.id === album.id) await loadAlbumItems()
+  if (failed) {
+    showToast(t('batch.addFailed', { done, failed, message: lastError }), true)
+  } else {
+    showToast(t('batch.addedToAlbum', { count: done, name: album.name }))
   }
 }
 
@@ -935,7 +1195,20 @@ watch(locale, (value) => {
 })
 
 function onKey(event) {
-  if (event.key === 'Escape') close()
+  if (event.key === 'Escape') {
+    if (contextMenu.value) {
+      closeContextMenu()
+      return
+    }
+    if (selected.value) {
+      close()
+      return
+    }
+    if (selectionActive.value) {
+      clearSelection()
+      return
+    }
+  }
   if (!selected.value) return
   if (selected.value.kind !== 'video') {
     if (event.key === '+' || event.key === '=') {
@@ -984,6 +1257,8 @@ onMounted(async () => {
     window.matchMedia('(orientation: portrait)'),
   ]
   for (const query of layoutQueries) query.addEventListener('change', onLayoutChange)
+  window.addEventListener('click', closeContextMenu)
+  window.addEventListener('scroll', closeContextMenu, true)
   await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
 
   observer = new IntersectionObserver(
@@ -1010,6 +1285,8 @@ onUnmounted(() => {
   if (transcodeTimer) clearTimeout(transcodeTimer)
   if (toastTimer) clearTimeout(toastTimer)
   for (const query of layoutQueries) query.removeEventListener('change', onLayoutChange)
+  window.removeEventListener('click', closeContextMenu)
+  window.removeEventListener('scroll', closeContextMenu, true)
   window.removeEventListener('keydown', onKey)
   document.body.classList.remove('modal-open')
 })
@@ -1069,6 +1346,13 @@ onUnmounted(() => {
       </select>
       <button :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly; reloadCurrent()">
         {{ t('filters.favorites') }}
+      </button>
+      <button
+        v-if="view === 'timeline' || view === 'album'"
+        :class="{ active: selectionMode }"
+        @click="toggleSelectionMode"
+      >
+        {{ selectionMode ? t('batch.cancel') : t('batch.select') }}
       </button>
       <button
         v-if="info && info.write_enabled && writableLibraries.length"
@@ -1324,13 +1608,26 @@ onUnmounted(() => {
             v-for="item in group.items"
             :key="item.id"
             class="tile"
+            :class="{ selected: isSelected(item.id) }"
             type="button"
-            @click="openItem(item)"
+            @click="handleTileClick(item, $event)"
+            @contextmenu.prevent="openContextMenu($event, item)"
+            @pointerdown="onTilePointerDown($event, item)"
+            @pointerup="onTilePointerUp"
+            @pointercancel="onTilePointerUp"
           >
             <img :src="item.thumb_url" :alt="item.filename" loading="lazy" @error="onImgError" />
             <span v-if="item.kind === 'video'" class="play">▶</span>
             <span v-if="item.favorite" class="fav">★</span>
             <span v-if="item.tags && item.tags.length" class="tag-dot">{{ item.tags.length }}</span>
+            <span
+              v-if="selectionMode || selectedIds.length"
+              class="tile-check"
+              :class="{ on: isSelected(item.id) }"
+              aria-hidden="true"
+            >
+              {{ isSelected(item.id) ? '✓' : '' }}
+            </span>
           </button>
         </div>
       </section>
@@ -1495,6 +1792,81 @@ onUnmounted(() => {
         <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
       </div>
     </aside>
+  </div>
+
+  <div v-if="selectionActive && !selected" class="selection-bar">
+    <span class="selection-count">
+      {{ t('batch.selected', { count: selectedItems.length }) }}
+    </span>
+    <button type="button" :disabled="!selectedItems.length" @click="viewSelection">
+      {{ t('batch.view') }}
+    </button>
+    <button type="button" :disabled="!selectedItems.length" @click="downloadSelection">
+      {{ t('batch.download') }}
+    </button>
+    <button type="button" :disabled="!selectedItems.length" @click="openAlbumPicker">
+      {{ t('batch.addToAlbum') }}
+    </button>
+    <button
+      v-if="info && info.write_enabled && info.trash_enabled"
+      type="button"
+      class="danger"
+      :disabled="!canDeleteSelection || batchBusy"
+      @click="deleteSelection"
+    >
+      {{ t('batch.delete') }}
+    </button>
+    <button type="button" @click="clearSelection">{{ t('batch.clear') }}</button>
+  </div>
+
+  <div
+    v-if="contextMenu"
+    class="ctx-menu"
+    :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+    @click.stop
+    @contextmenu.prevent
+  >
+    <p class="ctx-title">{{ contextMenu.item.filename }}</p>
+    <button type="button" @click="contextView">👁 {{ t('batch.view') }}</button>
+    <button type="button" @click="contextDownload">⬇ {{ t('batch.download') }}</button>
+    <button type="button" @click="contextAlbum">＋ {{ t('batch.addToAlbum') }}</button>
+    <button
+      type="button"
+      class="danger"
+      :disabled="!canDeleteSelection"
+      :title="canDeleteSelection ? '' : t('batch.readOnly')"
+      @click="contextDelete"
+    >
+      🗑 {{ t('batch.delete') }}
+    </button>
+    <p v-if="selectedItems.length > 1" class="ctx-hint">
+      {{ t('batch.selected', { count: selectedItems.length }) }}
+    </p>
+  </div>
+
+  <div v-if="showAlbumPicker" class="manager-modal" @click.self="closeAlbumPicker">
+    <div class="manager-dialog album-picker">
+      <h3>{{ t('batch.addToAlbum') }}</h3>
+      <p class="muted">
+        {{ t('batch.selected', { count: selectedItems.length }) }}
+      </p>
+      <div v-if="albums.length" class="album-picker-list">
+        <button
+          v-for="album in albums"
+          :key="album.id"
+          type="button"
+          :disabled="batchBusy"
+          @click="addSelectionToAlbum(album)"
+        >
+          <strong>{{ album.name }}</strong>
+          <small>{{ t('manage.items', album.item_count) }}</small>
+        </button>
+      </div>
+      <p v-else class="muted">{{ t('batch.noAlbums') }}</p>
+      <div class="dialog-actions">
+        <button type="button" @click="closeAlbumPicker">{{ t('actions.close') }}</button>
+      </div>
+    </div>
   </div>
 
   <div v-if="toast" class="toast" :class="{ error: toast.error }" role="status">

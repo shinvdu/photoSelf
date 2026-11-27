@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 — 2026-11-27
+
+- Thumbnail context menu on right-click (or touch long-press): view, download,
+  add to album, delete. Right-clicking an unselected tile selects it first;
+  right-clicking inside a multi-selection keeps it.
+- Multi-select: toolbar **Select** mode, `Ctrl`/`Cmd`-click to toggle and
+  `Shift`-click for a range; a bottom selection bar offers batch view,
+  download, add to album, delete and clear.
+- Batch delete is enabled only when every selected item is in a writable
+  library and `[write]`/`[trash]` are enabled; items are deleted one by one and
+  partial failures are reported. Batch album adds are metadata-only and work for
+  read-only libraries too.
+- Selection is scoped to the current timeline/album view and cleared when the
+  view or search changes.
+- Added `docs/local-development.md` with a reproducible local backend + Vite
+  development environment.
+
 ## 0.6.0 — 2026-11-27
 
 - Redesigned UI with a softer rose/lavender palette, rounded cards, pill tabs

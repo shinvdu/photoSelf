@@ -33,6 +33,26 @@ The scanner only reads files. It never moves, renames or deletes photos.
 | Lightbox | Image preview with zoom/pan, video playback, metadata, tags, albums, download |
 | Language | 中文 / English switcher; Chinese is the default and the choice is remembered |
 | Theme | Light / dark toggle in the header; follows the OS on first visit, then remembers your choice |
+| Right-click / long-press | Thumbnail context menu: view, download, add to album, delete |
+| Select | Multi-select mode; Ctrl/Cmd-click toggles, Shift-click selects a range, batch actions in a bottom bar |
+
+### Selecting thumbnails and batch actions
+
+- **Right-click** a thumbnail (long-press on touch) for a menu: **View**,
+  **Download**, **Add to album**, **Delete**. Right-clicking an unselected tile
+  selects it first; right-clicking inside an existing selection keeps it.
+- **Select** in the toolbar enters multi-select mode. `Ctrl`/`Cmd`-click toggles
+  a tile, `Shift`-click selects a range. On touch, tap tiles after enabling
+  **Select** (or long-press for the context menu).
+- The bottom **selection bar** shows the count and batch **View / Download /
+  Add to album / Delete / Clear**. Selection applies to the current timeline or
+  album view and is cleared when you switch views or run a search.
+- Batch **Delete** is enabled only when every selected item belongs to a
+  writable library (`read_only = false`) and both `[write]` and `[trash]` are
+  enabled. Items are moved to trash one by one; partial failures are reported.
+- Batch **Download** triggers one download per file and may show the browser's
+  "allow multiple downloads" prompt.
+- Batch **Add to album** is metadata only and works for read-only libraries too.
 
 ### Lightbox and mobile layout
 
