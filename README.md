@@ -60,6 +60,7 @@ Most self-hosted galleries assume a powerful server and want to import your libr
 - Upload, delete-to-trash, restore and permanent purge (write mode)
 - Background web-MP4 transcoding queue with job status (`play_url`)
 - PWA / installable offline shell
+- Multilingual UI (Simplified Chinese and English, Chinese by default)
 - `none` / `basic` / `proxy` authentication
 - Standalone mode (Rust serves API, media and UI) or reverse-proxy mode
 - Embedded-UI release build (optional feature)

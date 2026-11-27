@@ -12,6 +12,7 @@ export default defineConfig({
       manifest: {
         name: 'photoSelf',
         short_name: 'photoSelf',
+        lang: 'zh-CN',
         description: 'Lightweight self-hosted photo and video gallery',
         theme_color: '#0e1116',
         background_color: '#0e1116',

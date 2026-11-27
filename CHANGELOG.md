@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-11-27
+
+- Multilingual UI: Simplified Chinese and English, Chinese by default.
+- Language choice is remembered in `localStorage`; dates follow the active
+  locale and English uses proper singular/plural forms.
+- Fixed a duplicate `lang` key in the PWA manifest.
+
 ## 0.2.3 — 2026-11-27
 
 Security and data-safety fixes from the code review:

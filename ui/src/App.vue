@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const API = '/api/v1'
+const { t, locale } = useI18n({ useScope: 'global' })
+const currentLocale = ref(locale.value)
 const PLACEHOLDER =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -216,9 +219,9 @@ function groupsOf(list) {
 }
 
 function dateLabel(day) {
-  if (!day || day.startsWith('1970-')) return 'Undated'
+  if (!day || day.startsWith('1970-')) return t('date.undated')
   const date = new Date(`${day}T00:00:00`)
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(locale.value, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -227,7 +230,7 @@ function dateLabel(day) {
 }
 
 function formatDate(value) {
-  return value ? value.replace('T', ' ') : 'Unknown'
+  return value ? value.replace('T', ' ') : t('date.undated')
 }
 
 function formatDuration(ms) {
@@ -316,7 +319,7 @@ async function pollScan(jobId) {
       if (job.state === 'completed') {
         await Promise.all([loadInfo(), loadItems(true), loadTags()])
       } else {
-        error.value = job.error || 'scan failed'
+        error.value = job.error || t('errors.scanFailed')
       }
       return
     }
@@ -336,7 +339,7 @@ function onFiles(event) {
 async function uploadFiles(files) {
   const library = uploadLibrary.value
   if (!library) {
-    error.value = 'no writable library configured'
+    error.value = t('errors.noWritableLibrary')
     return
   }
   uploading.value = true
@@ -349,9 +352,13 @@ async function uploadFiles(files) {
     try {
       await api(`${API}/upload`, { method: 'POST', body: form })
       done += 1
-      uploadMessage.value = `Uploaded ${done}/${files.length}: ${file.name}`
+      uploadMessage.value = t('status.uploaded', {
+        done,
+        total: files.length,
+        name: file.name,
+      })
     } catch (err) {
-      error.value = `Upload failed (${file.name}): ${err.message}`
+      error.value = t('errors.uploadFailed', { name: file.name, message: err.message })
       break
     }
   }
@@ -434,7 +441,7 @@ async function createAlbum() {
 }
 
 async function deleteAlbum(album) {
-  if (!confirm(`Delete album "${album.name}"? The photos stay in the library.`)) return
+  if (!confirm(t('album.deleteConfirm', { name: album.name }))) return
   try {
     await api(`${API}/albums/${album.id}`, { method: 'DELETE' })
     if (activeAlbum.value?.id === album.id) backToAlbums()
@@ -451,7 +458,7 @@ async function addSelectedToAlbum() {
       method: 'POST',
       body: JSON.stringify({ item_id: selected.value.id }),
     })
-    uploadMessage.value = 'Added to album'
+    uploadMessage.value = t('errors.addedToAlbum')
     await loadAlbums()
     if (activeAlbum.value?.id === addAlbumId.value) await loadAlbumItems()
   } catch (err) {
@@ -475,7 +482,7 @@ async function removeSelectedFromAlbum() {
 
 async function deleteSelected() {
   if (!selected.value) return
-  if (!confirm(`Move "${selected.value.filename}" to trash?`)) return
+  if (!confirm(t('lightbox.deleteConfirm', { name: selected.value.filename }))) return
   const id = selected.value.id
   try {
     await api(`${API}/items/${id}`, { method: 'DELETE' })
@@ -499,7 +506,7 @@ async function restoreEntry(entry) {
 }
 
 async function purgeEntry(entry) {
-  if (!confirm(`Permanently delete "${entry.filename}"?`)) return
+  if (!confirm(t('trash.purgeConfirm', { name: entry.filename }))) return
   try {
     await api(`${API}/trash/${entry.id}`, { method: 'DELETE' })
     await loadTrash()
@@ -510,7 +517,7 @@ async function purgeEntry(entry) {
 
 async function transcodeSelected() {
   if (!selected.value) return
-  transcodeStatus.value = 'Starting…'
+  transcodeStatus.value = t('lightbox.transcodeStarting')
   try {
     const data = await api(`${API}/items/${selected.value.id}/transcode`, {
       method: 'POST',
@@ -518,7 +525,7 @@ async function transcodeSelected() {
     if (data.ready) {
       const updated = await api(`${API}/items/${selected.value.id}`)
       replaceItem(updated)
-      transcodeStatus.value = 'Web version ready'
+      transcodeStatus.value = t('lightbox.transcodeReady')
       return
     }
     pollTranscode(data.job_id, selected.value.id)
@@ -531,15 +538,18 @@ async function transcodeSelected() {
 async function pollTranscode(jobId, itemId) {
   try {
     const job = await api(`${API}/jobs/${jobId}`)
-    transcodeStatus.value = job.message || job.state
+    transcodeStatus.value =
+      job.state === 'running'
+        ? t('lightbox.transcodeRunning')
+        : job.message || job.state
     if (job.state === 'completed') {
       const updated = await api(`${API}/items/${itemId}`)
       replaceItem(updated)
-      transcodeStatus.value = 'Web version ready'
+      transcodeStatus.value = t('lightbox.transcodeReady')
       return
     }
     if (job.state === 'failed') {
-      transcodeStatus.value = job.error || 'Transcode failed'
+      transcodeStatus.value = t('lightbox.transcodeFailed')
       return
     }
     transcodeTimer = setTimeout(() => pollTranscode(jobId, itemId), 1500)
@@ -548,6 +558,18 @@ async function pollTranscode(jobId, itemId) {
     error.value = err.message
   }
 }
+
+function changeLanguage(event) {
+  const value = event.target.value
+  locale.value = value
+  document.documentElement.lang = value
+  localStorage.setItem('photoself-lang', value)
+}
+
+watch(locale, (value) => {
+  currentLocale.value = value
+  document.documentElement.lang = value
+})
 
 function onKey(event) {
   if (event.key === 'Escape') close()
@@ -576,6 +598,7 @@ watch(
 )
 
 onMounted(async () => {
+  document.documentElement.lang = locale.value
   await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
 
   observer = new IntersectionObserver(
@@ -615,28 +638,32 @@ onUnmounted(() => {
 
     <nav class="tabs">
       <button :class="{ active: view === 'timeline' }" @click="switchView('timeline')">
-        Timeline
+        {{ t('nav.timeline') }}
       </button>
       <button :class="{ active: view === 'albums' || view === 'album' }" @click="switchView('albums')">
-        Albums
+        {{ t('nav.albums') }}
       </button>
       <button
         v-if="info && info.write_enabled && info.trash_enabled"
         :class="{ active: view === 'trash' }"
         @click="switchView('trash')"
       >
-        Trash
+        {{ t('nav.trash') }}
       </button>
     </nav>
 
     <form class="search" @submit.prevent="search">
-      <input v-model="query" type="search" placeholder="Search filename…" />
-      <button type="submit">Search</button>
+      <input v-model="query" type="search" :placeholder="t('search.placeholder')" />
+      <button type="submit">{{ t('search.submit') }}</button>
     </form>
 
     <div class="actions">
+      <select v-model="currentLocale" :title="t('language.label')" @change="changeLanguage">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+      </select>
       <select v-if="view === 'timeline'" v-model="tagFilter" @change="reloadCurrent">
-        <option value="">All tags</option>
+        <option value="">{{ t('filters.allTags') }}</option>
         <option v-for="tag in tags" :key="tag.id" :value="tag.name">
           {{ tag.name }}
         </option>
@@ -644,24 +671,24 @@ onUnmounted(() => {
       <select
         v-if="writableLibraries.length > 1"
         v-model="uploadLibrary"
-        title="Upload library"
+        :title="t('actions.upload')"
       >
         <option v-for="library in writableLibraries" :key="library.id" :value="library.id">
           {{ library.name || library.id }}
         </option>
       </select>
       <button :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly; reloadCurrent()">
-        ★ Favorites
+        {{ t('filters.favorites') }}
       </button>
       <button
         v-if="info && info.write_enabled && writableLibraries.length"
         :disabled="uploading"
         @click="fileInput?.click()"
       >
-        {{ uploading ? 'Uploading…' : 'Upload' }}
+        {{ uploading ? t('actions.uploading') : t('actions.upload') }}
       </button>
       <button :disabled="scanning" @click="startScan">
-        {{ scanning ? 'Scanning…' : 'Scan' }}
+        {{ scanning ? t('actions.scanning') : t('actions.scan') }}
       </button>
     </div>
   </header>
@@ -676,9 +703,9 @@ onUnmounted(() => {
   />
 
   <div class="statusbar">
-    <span>{{ info ? info.item_count : currentItems.length }} items</span>
+    <span>{{ t('status.items', info ? info.item_count : currentItems.length) }}</span>
     <span v-if="scanning && scanProgress">
-      scan {{ scanProgress.progress }} / {{ scanProgress.total }}
+      {{ t('status.scanProgress', { done: scanProgress.progress, total: scanProgress.total }) }}
     </span>
     <span v-if="uploadMessage">{{ uploadMessage }}</span>
     <span v-if="error" class="error">{{ error }}</span>
@@ -688,12 +715,12 @@ onUnmounted(() => {
     <!-- Albums -->
     <section v-if="view === 'albums'" class="albums-view">
       <div class="create-row">
-        <input v-model="newAlbumName" placeholder="New album name…" @keyup.enter="createAlbum" />
-        <button @click="createAlbum">Create album</button>
+        <input v-model="newAlbumName" :placeholder="t('album.createPlaceholder')" @keyup.enter="createAlbum" />
+        <button @click="createAlbum">{{ t('album.create') }}</button>
       </div>
       <div v-if="!albums.length" class="empty">
-        <h2>No albums yet</h2>
-        <p>Create an album, then add photos from the lightbox.</p>
+        <h2>{{ t('empty.noAlbumsTitle') }}</h2>
+        <p>{{ t('empty.noAlbumsHint') }}</p>
       </div>
       <div class="album-grid">
         <article v-for="album in albums" :key="album.id" class="album-card" @click="openAlbum(album)">
@@ -701,25 +728,25 @@ onUnmounted(() => {
           <div v-else class="album-cover-empty">▣</div>
           <div class="album-info">
             <strong>{{ album.name }}</strong>
-            <small>{{ album.item_count }} items</small>
+            <small>{{ t('album.items', album.item_count) }}</small>
           </div>
-          <button class="album-delete" title="Delete album" @click.stop="deleteAlbum(album)">×</button>
+          <button class="album-delete" :title="t('album.deleteTitle')" @click.stop="deleteAlbum(album)">×</button>
         </article>
       </div>
     </section>
 
     <!-- Trash -->
     <section v-else-if="view === 'trash'" class="trash-view">
-      <h2>Trash</h2>
-      <p v-if="!trashEntries.length" class="empty">Trash is empty.</p>
+      <h2>{{ t('trash.title') }}</h2>
+      <p v-if="!trashEntries.length" class="empty">{{ t('empty.trash') }}</p>
       <div v-for="entry in trashEntries" :key="entry.id" class="trash-row">
         <div>
           <strong>{{ entry.filename }}</strong>
-          <small>{{ formatDate(entry.deleted_at) }} · {{ entry.library_id }}</small>
+          <small>{{ t('trash.deletedAt', { date: formatDate(entry.deleted_at), library: entry.library_id }) }}</small>
         </div>
         <div class="row">
-          <button @click="restoreEntry(entry)">Restore</button>
-          <button class="danger" @click="purgeEntry(entry)">Delete forever</button>
+          <button @click="restoreEntry(entry)">{{ t('trash.restore') }}</button>
+          <button class="danger" @click="purgeEntry(entry)">{{ t('trash.purge') }}</button>
         </div>
       </div>
     </section>
@@ -727,17 +754,17 @@ onUnmounted(() => {
     <!-- Timeline / album -->
     <template v-else>
       <div v-if="view === 'album'" class="album-header">
-        <button @click="backToAlbums">← Albums</button>
+        <button @click="backToAlbums">{{ t('album.back') }}</button>
         <h2>{{ activeAlbum?.name }}</h2>
-        <small>{{ albumItems.length }} items</small>
+        <small>{{ t('album.items', albumItems.length) }}</small>
         <button v-if="selected && activeAlbum" @click="removeSelectedFromAlbum">
-          Remove selected from album
+          {{ t('album.removeSelected') }}
         </button>
       </div>
 
       <div v-if="!loading && currentItems.length === 0" class="empty">
-        <h2>{{ view === 'album' ? 'Album is empty' : 'No media indexed yet' }}</h2>
-        <p v-if="view !== 'album'">Check <code>config.toml</code>, then press <strong>Scan</strong>.</p>
+        <h2>{{ view === 'album' ? t('empty.noAlbum') : t('empty.noMediaTitle') }}</h2>
+        <p v-if="view !== 'album'">{{ t('empty.noMediaHint', { config: 'config.toml', scan: t('actions.scan') }) }}</p>
       </div>
 
       <section v-for="group in groups" :key="group.date" class="day">
@@ -766,14 +793,14 @@ onUnmounted(() => {
         :disabled="loading"
         @click="loadItems(false)"
       >
-        {{ loading ? 'Loading…' : 'Load more' }}
+        {{ loading ? t('actions.loading') : t('actions.loadMore') }}
       </button>
     </template>
   </main>
 
   <div v-if="selected" class="lightbox" @click.self="close">
-    <button class="close" type="button" @click="close">×</button>
-    <button class="nav prev" type="button" @click.stop="prev">‹</button>
+    <button class="close" type="button" :aria-label="t('actions.close')" @click="close">×</button>
+    <button class="nav prev" type="button" :aria-label="t('actions.previous')" @click.stop="prev">‹</button>
 
     <div class="viewer">
       <img
@@ -790,27 +817,27 @@ onUnmounted(() => {
           @error="videoError = true"
         ></video>
         <div v-if="videoError" class="video-fallback">
-          This browser cannot play the original codec.
-          <a :href="selected.media_url" :download="selected.filename">Download original</a>
-          <span v-if="info && info.transcode_enabled"> or generate a web version below.</span>
+          {{ t('lightbox.videoFallback') }}
+          <a :href="selected.media_url" :download="selected.filename">{{ t('lightbox.downloadOriginal') }}</a>
+          <span v-if="info && info.transcode_enabled">{{ t('lightbox.orGenerate') }}</span>
         </div>
       </template>
     </div>
 
-    <button class="nav next" type="button" @click.stop="next">›</button>
+    <button class="nav next" type="button" :aria-label="t('actions.next')" @click.stop="next">›</button>
 
     <aside class="meta">
       <h3>{{ selected.filename }}</h3>
       <dl>
-        <div><dt>Date</dt><dd>{{ formatDate(selected.taken_at) }}</dd></div>
+        <div><dt>{{ t('lightbox.date') }}</dt><dd>{{ formatDate(selected.taken_at) }}</dd></div>
         <div v-if="selected.width">
-          <dt>Dimensions</dt><dd>{{ selected.width }} × {{ selected.height }}</dd>
+          <dt>{{ t('lightbox.dimensions') }}</dt><dd>{{ selected.width }} × {{ selected.height }}</dd>
         </div>
         <div v-if="selected.duration_ms">
-          <dt>Duration</dt><dd>{{ formatDuration(selected.duration_ms) }}</dd>
+          <dt>{{ t('lightbox.duration') }}</dt><dd>{{ formatDuration(selected.duration_ms) }}</dd>
         </div>
-        <div v-if="selected.camera"><dt>Camera</dt><dd>{{ selected.camera }}</dd></div>
-        <div><dt>Size</dt><dd>{{ formatBytes(selected.size) }}</dd></div>
+        <div v-if="selected.camera"><dt>{{ t('lightbox.camera') }}</dt><dd>{{ selected.camera }}</dd></div>
+        <div><dt>{{ t('lightbox.size') }}</dt><dd>{{ formatBytes(selected.size) }}</dd></div>
       </dl>
 
       <div class="tags">
@@ -821,17 +848,17 @@ onUnmounted(() => {
       </div>
       <div class="tag-add">
         <select v-model="addTagId">
-          <option value="">Add tag…</option>
+          <option value="">{{ t('lightbox.addTag') }}</option>
           <option v-for="tag in tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
         </select>
         <button type="button" :disabled="!addTagId" @click="attachTag(addTagId)">+</button>
-        <input v-model="newTagName" placeholder="New tag" @keyup.enter="createAndAttachTag" />
-        <button type="button" @click="createAndAttachTag">Create</button>
+        <input v-model="newTagName" :placeholder="t('lightbox.newTag')" @keyup.enter="createAndAttachTag" />
+        <button type="button" @click="createAndAttachTag">{{ t('lightbox.create') }}</button>
       </div>
 
       <div v-if="albums.length" class="tag-add">
         <select v-model="addAlbumId">
-          <option value="">Add to album…</option>
+          <option value="">{{ t('lightbox.addToAlbum') }}</option>
           <option
             v-for="album in albums"
             :key="album.id"
@@ -841,21 +868,21 @@ onUnmounted(() => {
             {{ album.name }}
           </option>
         </select>
-        <button type="button" :disabled="!addAlbumId" @click="addSelectedToAlbum">Add</button>
-        <button v-if="activeAlbum" type="button" @click="removeSelectedFromAlbum">Remove</button>
+        <button type="button" :disabled="!addAlbumId" @click="addSelectedToAlbum">{{ t('lightbox.add') }}</button>
+        <button v-if="activeAlbum" type="button" @click="removeSelectedFromAlbum">{{ t('lightbox.remove') }}</button>
       </div>
 
       <div class="row">
         <button type="button" @click="toggleFavorite(selected)">
-          {{ selected.favorite ? '★ Unfavorite' : '☆ Favorite' }}
+          {{ selected.favorite ? t('lightbox.unfavorite') : t('lightbox.favorite') }}
         </button>
-        <a :href="selected.media_url" :download="selected.filename">Download</a>
+        <a :href="selected.media_url" :download="selected.filename">{{ t('lightbox.download') }}</a>
         <button
           v-if="selected.kind === 'video' && info && info.transcode_enabled && !selected.play_url"
           type="button"
           @click="transcodeSelected"
         >
-          Generate web version
+          {{ t('lightbox.generateWeb') }}
         </button>
         <button
           v-if="canDeleteSelected"
@@ -863,7 +890,7 @@ onUnmounted(() => {
           class="danger"
           @click="deleteSelected"
         >
-          Delete
+          {{ t('lightbox.delete') }}
         </button>
       </div>
       <p v-if="transcodeStatus" class="transcode-status">{{ transcodeStatus }}</p>
