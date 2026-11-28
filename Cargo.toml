@@ -24,7 +24,7 @@ globset = "0.4"
 blake3 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
 kamadak-exif = "0.6"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
