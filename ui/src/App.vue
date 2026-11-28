@@ -1,37 +1,30 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import { API, api } from './api'
+import { toast, showToast, clearToast } from './toast'
+import { onImgError } from './placeholder'
+import { formatDate, formatDuration, formatBytes, groupByDay, dateLabel } from './format'
+import { useTheme } from './composables/useTheme'
+import { useLightbox } from './composables/useLightbox'
+import { useSelection } from './composables/useSelection'
+import AppHeader from './components/AppHeader.vue'
+import AlbumsView from './components/AlbumsView.vue'
+import TrashView from './components/TrashView.vue'
+import LibraryManager from './components/LibraryManager.vue'
+import SelectionBar from './components/SelectionBar.vue'
+import ContextMenu from './components/ContextMenu.vue'
+import AlbumPicker from './components/AlbumPicker.vue'
 
-const API = '/api/v1'
 const { t, locale } = useI18n({ useScope: 'global' })
+const route = useRoute()
+const router = useRouter()
+
 const currentLocale = ref(locale.value)
-const theme = ref(document.documentElement.dataset.theme || 'light')
-
-const THEME_COLORS = { light: '#fff8fb', dark: '#171118' }
-
-function toggleTheme() {
-  theme.value = theme.value === 'dark' ? 'light' : 'dark'
-  document.documentElement.dataset.theme = theme.value
-  try {
-    localStorage.setItem('photoself-theme', theme.value)
-  } catch {
-    // private mode / disabled storage
-  }
-  const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute('content', THEME_COLORS[theme.value])
-}
-const PLACEHOLDER =
-  'data:image/svg+xml;utf8,' +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320">' +
-      '<rect width="320" height="320" fill="#1b2028"/>' +
-      '<path d="M80 240l55-70 40 48 30-36 45 58H80z" fill="#2d3642"/>' +
-      '<circle cx="120" cy="115" r="22" fill="#2d3642"/>' +
-      '</svg>',
-  )
+const { theme, toggleTheme, applyThemeMeta } = useTheme()
 
 const info = ref(null)
-const view = ref('timeline')
 const items = ref([])
 const nextCursor = ref(null)
 const loading = ref(false)
@@ -46,9 +39,7 @@ const scanProgress = ref(null)
 const sentinel = ref(null)
 
 const albums = ref([])
-const activeAlbum = ref(null)
 const albumItems = ref([])
-const trashEntries = ref([])
 const uploadLibrary = ref('')
 const uploading = ref(false)
 const uploadMessage = ref('')
@@ -58,78 +49,31 @@ const addAlbumId = ref('')
 const transcodeStatus = ref('')
 const videoError = ref(false)
 const fileInput = ref(null)
-const newAlbumName = ref('')
-const showAlbumDialog = ref(false)
-const albumError = ref('')
-
-const libraryList = ref([])
-const libraryLoading = ref(false)
-const libraryMessage = ref('')
-const showAddLibrary = ref(false)
-const addingLibrary = ref(false)
-const libraryError = ref('')
-const newLibrary = ref({ path: '', name: '', read_only: true })
-const browser = ref(null)
-const browserLoading = ref(false)
-const toast = ref(null)
-
-const selectionMode = ref(false)
-const selectedIds = ref([])
-const contextMenu = ref(null)
-const showAlbumPicker = ref(false)
-const batchBusy = ref(false)
-
-let lastSelectedId = null
-let tilePressTimer = null
-let suppressTileClick = false
-
-let toastTimer = null
-
-const zoomStage = ref(null)
-const zoom = ref(1)
-const panX = ref(0)
-const panY = ref(0)
-const dragging = ref(false)
-const hiResLoaded = ref(false)
-const compactLayout = () =>
-  typeof window !== 'undefined' &&
-  Boolean(window.matchMedia) &&
-  (window.matchMedia('(max-width: 860px)').matches ||
-    window.matchMedia('(orientation: portrait)').matches)
-const metaOpen = ref(!compactLayout())
-const pointers = new Map()
-let layoutQueries = []
-let lastCompact = compactLayout()
-let dragState = null
-let pinchState = null
-let lastTap = { time: 0, x: 0, y: 0 }
-let suppressDblClickUntil = 0
+const libraryManagerRef = ref(null)
 
 let scanTimer = null
 let transcodeTimer = null
 
-async function api(path, options = {}) {
-  const isForm = options.body instanceof FormData
-  const headers = {
-    Accept: 'application/json',
-    'X-Requested-With': 'photoSelf',
-    ...(options.headers || {}),
+const view = computed(() => {
+  switch (route.name) {
+    case 'albums':
+      return 'albums'
+    case 'album':
+      return 'album'
+    case 'trash':
+      return 'trash'
+    case 'libraries':
+      return 'manage'
+    default:
+      return 'timeline'
   }
-  if (options.body && !isForm) headers['Content-Type'] = 'application/json'
-  const response = await fetch(path, { ...options, headers })
-  if (!response.ok) {
-    let message = response.statusText
-    try {
-      const problem = await response.json()
-      message = problem.detail || problem.title || message
-    } catch {
-      // ignore non-JSON errors
-    }
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-  if (response.status === 204) return null
-  return response.json()
-}
+})
+
+const activeAlbum = computed(() => {
+  if (view.value !== 'album') return null
+  const id = String(route.params.id)
+  return albums.value.find((album) => String(album.id) === id) || null
+})
 
 async function loadInfo() {
   try {
@@ -187,7 +131,6 @@ function checkLoadMore() {
 function onWindowScroll() {
   checkLoadMore()
 }
-
 async function loadAlbums() {
   try {
     const data = await api(`${API}/albums`)
@@ -208,202 +151,6 @@ async function loadAlbumItems() {
   } finally {
     loading.value = false
   }
-}
-
-async function loadTrash() {
-  try {
-    const data = await api(`${API}/trash`)
-    trashEntries.value = data.entries || []
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-function showToast(text, isError = false) {
-  toast.value = { text, error: isError }
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    toast.value = null
-  }, isError ? 4000 : 2500)
-}
-
-async function loadManagedLibraries() {
-  libraryLoading.value = true
-  try {
-    const data = await api(`${API}/libraries`)
-    libraryList.value = data.libraries || []
-  } catch (err) {
-    error.value = err.message
-  } finally {
-    libraryLoading.value = false
-  }
-}
-
-function openAddLibrary() {
-  libraryError.value = ''
-  newLibrary.value = { path: '', name: '', read_only: true }
-  browser.value = null
-  showAddLibrary.value = true
-}
-
-function closeAddLibrary() {
-  if (addingLibrary.value) return
-  showAddLibrary.value = false
-  browser.value = null
-}
-
-async function browseTo(path = '') {
-  browserLoading.value = true
-  libraryError.value = ''
-  try {
-    const params = path ? `?path=${encodeURIComponent(path)}` : ''
-    browser.value = await api(`${API}/fs/dirs${params}`)
-  } catch (err) {
-    libraryError.value = err.message
-  } finally {
-    browserLoading.value = false
-  }
-}
-
-function chooseBrowserDir() {
-  if (!browser.value?.path) return
-  newLibrary.value.path = browser.value.path
-  if (!newLibrary.value.name.trim()) {
-    const parts = browser.value.path.split('/').filter(Boolean)
-    newLibrary.value.name = parts[parts.length - 1] || ''
-  }
-  browser.value = null
-}
-
-async function addLibrary() {
-  if (!newLibrary.value.path.trim() || addingLibrary.value) return
-  addingLibrary.value = true
-  libraryError.value = ''
-  try {
-    const result = await api(`${API}/libraries`, {
-      method: 'POST',
-      body: JSON.stringify({
-        path: newLibrary.value.path.trim(),
-        name: newLibrary.value.name.trim() || null,
-        read_only: newLibrary.value.read_only,
-      }),
-    })
-    libraryMessage.value = t('manage.added', { name: result.library?.name || '' })
-    showAddLibrary.value = false
-    browser.value = null
-    await loadManagedLibraries()
-    if (result.scan_job) {
-      scanning.value = true
-      pollScan(result.scan_job)
-    }
-  } catch (err) {
-    libraryError.value = err.message
-  } finally {
-    addingLibrary.value = false
-  }
-}
-
-async function scanLibraryEntry(library) {
-  if (scanning.value) return
-  libraryMessage.value = ''
-  error.value = ''
-  try {
-    const data = await api(`${API}/libraries/${library.id}/scan`, { method: 'POST' })
-    scanning.value = true
-    pollScan(data.job_id)
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-async function toggleLibrary(library) {
-  libraryMessage.value = ''
-  try {
-    await api(`${API}/libraries/${library.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: !library.enabled }),
-    })
-    await loadManagedLibraries()
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-async function removeLibrary(library) {
-  if (
-    !confirm(
-      t('manage.removeConfirm', { name: library.name, count: library.item_count }),
-    )
-  ) {
-    return
-  }
-  libraryMessage.value = ''
-  try {
-    await api(`${API}/libraries/${library.id}`, { method: 'DELETE' })
-    await loadManagedLibraries()
-    await Promise.all([loadInfo(), loadItems(true)])
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-async function importLibraries() {
-  if (!confirm(t('manage.importConfirm'))) return
-  libraryMessage.value = ''
-  try {
-    const data = await api(`${API}/libraries/import-config`, { method: 'POST' })
-    libraryMessage.value = t('manage.importDone', { count: data.imported })
-    await Promise.all([loadManagedLibraries(), loadInfo()])
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-function reloadCurrent() {
-  if (view.value === 'timeline') {
-    nextCursor.value = null
-    loadItems(true)
-  } else if (view.value === 'album') {
-    loadAlbumItems()
-  } else if (view.value === 'trash') {
-    loadTrash()
-  } else if (view.value === 'manage') {
-    loadManagedLibraries()
-  }
-}
-
-function search() {
-  clearSelection()
-  view.value = 'timeline'
-  activeAlbum.value = null
-  reloadCurrent()
-}
-
-function switchView(next) {
-  clearSelection()
-  uploadMessage.value = ''
-  view.value = next
-  selected.value = null
-  activeAlbum.value = null
-  if (next === 'timeline') loadItems(true)
-  if (next === 'albums') loadAlbums()
-  if (next === 'trash') loadTrash()
-  if (next === 'manage') loadManagedLibraries()
-}
-
-function openAlbum(album) {
-  clearSelection()
-  activeAlbum.value = album
-  view.value = 'album'
-  selected.value = null
-  loadAlbumItems()
-}
-
-function backToAlbums() {
-  view.value = 'albums'
-  activeAlbum.value = null
-  selected.value = null
-  loadAlbums()
 }
 
 const writableLibraries = computed(() =>
@@ -433,14 +180,6 @@ const writableLibraryIds = computed(
     ),
 )
 
-const selectionActive = computed(
-  () => selectionMode.value || selectedIds.value.length > 0,
-)
-
-const selectedItems = computed(() =>
-  currentItems.value.filter((item) => selectedIds.value.includes(item.id)),
-)
-
 const canDeleteSelection = computed(
   () =>
     Boolean(info.value?.write_enabled) &&
@@ -451,220 +190,27 @@ const canDeleteSelection = computed(
     ),
 )
 
-const groups = computed(() => groupsOf(currentItems.value))
+const groups = computed(() => groupByDay(currentItems.value))
 
-const selectedIndex = computed(() =>
-  selected.value
-    ? currentItems.value.findIndex((item) => item.id === selected.value.id)
-    : -1,
-)
-
-function groupsOf(list) {
-  const map = new Map()
-  for (const item of list) {
-    const day = (item.taken_at || '1970-01-01').slice(0, 10)
-    if (!map.has(day)) map.set(day, [])
-    map.get(day).push(item)
-  }
-  return [...map.entries()].map(([date, groupItems]) => ({ date, items: groupItems }))
-}
-
-function dateLabel(day) {
-  if (!day || day.startsWith('1970-')) return t('date.undated')
-  const date = new Date(`${day}T00:00:00`)
-  return date.toLocaleDateString(locale.value, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  })
-}
-
-function formatDate(value) {
-  return value ? value.replace('T', ' ') : t('date.undated')
-}
-
-function formatDuration(ms) {
-  if (!ms) return ''
-  const total = Math.round(ms / 1000)
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return ''
-  const units = ['B', 'KB', 'MB', 'GB']
-  let index = 0
-  let value = bytes
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024
-    index += 1
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[index]}`
-}
-
-const isZoomed = computed(() => zoom.value > 1.001)
-const zoomPercent = computed(() => `${Math.round(zoom.value * 100)}%`)
-const zoomStyle = computed(() => ({
-  transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
-  transition: dragging.value ? 'none' : 'transform 150ms ease',
-}))
-const showHiRes = computed(() => isZoomed.value && Boolean(selected.value?.media_url))
-
-function clampPan(x, y, scale = zoom.value) {
-  const el = zoomStage.value
-  if (!el) return { x: 0, y: 0 }
-  const maxX = Math.max(0, (el.offsetWidth * (scale - 1)) / 2)
-  const maxY = Math.max(0, (el.offsetHeight * (scale - 1)) / 2)
-  return {
-    x: Math.min(maxX, Math.max(-maxX, x)),
-    y: Math.min(maxY, Math.max(-maxY, y)),
-  }
-}
-
-function applyZoom(nextScale, clientX, clientY) {
-  const scale = Math.min(5, Math.max(1, nextScale))
-  if (scale === 1) {
-    resetZoom()
-    return
-  }
-  const el = zoomStage.value
-  const rect = el?.getBoundingClientRect()
-  const originX = clientX != null && rect ? clientX - (rect.left + rect.width / 2) : 0
-  const originY = clientY != null && rect ? clientY - (rect.top + rect.height / 2) : 0
-  const ratio = scale / zoom.value
-  const next = clampPan(
-    panX.value * ratio + originX * (1 - ratio),
-    panY.value * ratio + originY * (1 - ratio),
-    scale,
-  )
-  zoom.value = scale
-  panX.value = next.x
-  panY.value = next.y
-}
-
-function resetZoom() {
-  zoom.value = 1
-  panX.value = 0
-  panY.value = 0
-  hiResLoaded.value = false
-}
-
-function zoomBy(factor) {
-  const rect = zoomStage.value?.getBoundingClientRect()
-  applyZoom(
-    zoom.value * factor,
-    rect ? rect.left + rect.width / 2 : null,
-    rect ? rect.top + rect.height / 2 : null,
-  )
-}
-
-function onWheel(event) {
-  if (selected.value?.kind === 'video') return
-  applyZoom(zoom.value * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY)
-}
-
-function onDoubleClick(event) {
-  if (performance.now() < suppressDblClickUntil) return
-  if (isZoomed.value) resetZoom()
-  else applyZoom(2.5, event.clientX, event.clientY)
-}
-
-function onPointerDown(event) {
-  if (event.pointerType === 'mouse' && event.button !== 0) return
-  try {
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  } catch {
-    // synthetic events may reference an unknown pointer id
-  }
-  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-  if (pointers.size === 2) {
-    const [a, b] = [...pointers.values()]
-    pinchState = { distance: Math.hypot(a.x - b.x, a.y - b.y), zoom: zoom.value }
-    dragState = null
-    dragging.value = true
-    return
-  }
-  if (pointers.size === 1) {
-    dragState = {
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: panX.value,
-      originY: panY.value,
-      pointerType: event.pointerType,
-      moved: false,
-    }
-    dragging.value = true
-  }
-}
-
-function onPointerMove(event) {
-  if (!pointers.has(event.pointerId)) return
-  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-  if (pointers.size >= 2 && pinchState) {
-    const [a, b] = [...pointers.values()]
-    const distance = Math.hypot(a.x - b.x, a.y - b.y)
-    if (pinchState.distance > 0) {
-      applyZoom(
-        pinchState.zoom * (distance / pinchState.distance),
-        (a.x + b.x) / 2,
-        (a.y + b.y) / 2,
-      )
-    }
-    return
-  }
-  if (!dragState) return
-  const dx = event.clientX - dragState.startX
-  const dy = event.clientY - dragState.startY
-  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragState.moved = true
-  if (isZoomed.value) {
-    const next = clampPan(dragState.originX + dx, dragState.originY + dy)
-    panX.value = next.x
-    panY.value = next.y
-  }
-}
-
-function onPointerUp(event) {
-  pointers.delete(event.pointerId)
-  if (pointers.size < 2) pinchState = null
-  if (pointers.size > 0) return
-  if (dragState?.pointerType === 'touch' && !dragState.moved) {
-    const now = performance.now()
-    const dx = event.clientX - lastTap.x
-    const dy = event.clientY - lastTap.y
-    if (now - lastTap.time < 320 && Math.hypot(dx, dy) < 30) {
-      lastTap = { time: 0, x: 0, y: 0 }
-      suppressDblClickUntil = now + 500
-      if (isZoomed.value) resetZoom()
-      else applyZoom(2.5, event.clientX, event.clientY)
-    } else {
-      lastTap = { time: now, x: event.clientX, y: event.clientY }
-    }
-  } else if (dragState?.pointerType === 'touch') {
-    lastTap = { time: 0, x: 0, y: 0 }
-  }
-  if (!isZoomed.value && dragState?.moved && dragState.pointerType === 'touch') {
-    const dx = event.clientX - dragState.startX
-    const dy = event.clientY - dragState.startY
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-      if (dx < 0) next()
-      else prev()
-    }
-  }
-  dragState = null
-  dragging.value = false
-}
-
-function toggleMeta() {
-  metaOpen.value = !metaOpen.value
-}
-
-function onLayoutChange() {
-  const compact = compactLayout()
-  if (compact !== lastCompact) {
-    lastCompact = compact
-    metaOpen.value = !compact
-  }
-}
+const {
+  zoomStage,
+  hiResLoaded,
+  metaOpen,
+  isZoomed,
+  zoomPercent,
+  zoomStyle,
+  showHiRes,
+  resetZoom,
+  zoomBy,
+  onWheel,
+  onDoubleClick,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  toggleMeta,
+  prev,
+  next,
+} = useLightbox({ selected, currentItems })
 
 function openItem(item) {
   resetZoom()
@@ -678,111 +224,134 @@ function openItem(item) {
 function close() {
   selected.value = null
 }
+const {
+  selectionMode,
+  selectedIds,
+  contextMenu,
+  showAlbumPicker,
+  batchBusy,
+  selectionActive,
+  selectedItems,
+  isSelected,
+  clearSelection,
+  toggleSelectionMode,
+  handleTileClick,
+  openContextMenu,
+  closeContextMenu,
+  onTilePointerDown,
+  onTilePointerUp,
+} = useSelection({ currentItems, openItem })
 
-function prev() {
-  if (selectedIndex.value > 0) selected.value = currentItems.value[selectedIndex.value - 1]
+function routeQueryValue(value) {
+  if (Array.isArray(value)) return value[0] || ''
+  return value || ''
 }
 
-function next() {
-  if (selectedIndex.value >= 0 && selectedIndex.value < currentItems.value.length - 1) {
-    selected.value = currentItems.value[selectedIndex.value + 1]
-  }
+function timelineQuery() {
+  const params = {}
+  if (query.value.trim()) params.q = query.value.trim()
+  if (tagFilter.value) params.tag = tagFilter.value
+  if (favoritesOnly.value) params.favorite = 'true'
+  return params
 }
 
-function isSelected(id) {
-  return selectedIds.value.includes(id)
+function navigate(location) {
+  const resolved = router.resolve(location)
+  if (resolved.fullPath === route.fullPath) return applyRoute()
+  return router.push(location)
 }
 
-function clearSelection() {
-  selectedIds.value = []
-  selectionMode.value = false
-  contextMenu.value = null
-  showAlbumPicker.value = false
-  lastSelectedId = null
-}
-
-function toggleSelectionMode() {
-  if (selectionMode.value) clearSelection()
-  else {
-    selectionMode.value = true
-    selectedIds.value = []
-  }
-}
-
-function toggleSelect(item) {
-  const id = item.id
-  selectedIds.value = isSelected(id)
-    ? selectedIds.value.filter((value) => value !== id)
-    : [...selectedIds.value, id]
-  lastSelectedId = id
-}
-
-function handleTileClick(item, event) {
-  if (suppressTileClick) {
-    suppressTileClick = false
-    return
-  }
-  if (event.shiftKey && lastSelectedId) {
-    const list = currentItems.value
-    const from = list.findIndex((entry) => entry.id === lastSelectedId)
-    const to = list.findIndex((entry) => entry.id === item.id)
-    if (from >= 0 && to >= 0) {
-      const [start, end] = from < to ? [from, to] : [to, from]
-      const ids = new Set(selectedIds.value)
-      for (let index = start; index <= end; index += 1) ids.add(list[index].id)
-      selectedIds.value = [...ids]
-      selectionMode.value = true
+async function applyRoute() {
+  clearSelection()
+  selected.value = null
+  uploadMessage.value = ''
+  if (view.value === 'timeline') {
+    query.value = routeQueryValue(route.query.q)
+    tagFilter.value = routeQueryValue(route.query.tag)
+    favoritesOnly.value = route.query.favorite === 'true'
+    nextCursor.value = null
+    await loadItems(true)
+  } else if (view.value === 'albums') {
+    await loadAlbums()
+  } else if (view.value === 'album') {
+    if (!albums.value.length) await loadAlbums()
+    const id = String(route.params.id)
+    const album = albums.value.find((entry) => String(entry.id) === id)
+    if (!album) {
+      await router.replace({ name: 'albums' })
       return
     }
+    await loadAlbumItems()
   }
-  if (event.metaKey || event.ctrlKey || selectionMode.value) {
-    selectionMode.value = true
-    toggleSelect(item)
+  // TrashView and LibraryManager fetch their own data when mounted.
+}
+
+function search() {
+  navigate({ name: 'timeline', query: timelineQuery() })
+}
+
+function onTagChange() {
+  navigate({ name: 'timeline', query: timelineQuery() })
+}
+
+function toggleFavorites() {
+  favoritesOnly.value = !favoritesOnly.value
+  navigate({ name: 'timeline', query: timelineQuery() })
+}
+
+function switchView(nextView) {
+  if (nextView === 'timeline') {
+    navigate({ name: 'timeline', query: timelineQuery() })
+  } else if (nextView === 'albums') {
+    navigate({ name: 'albums' })
+  } else if (nextView === 'trash') {
+    navigate({ name: 'trash' })
+  } else if (nextView === 'manage') {
+    navigate({ name: 'libraries' })
+  }
+}
+
+function openAlbum(album) {
+  clearSelection()
+  navigate({ name: 'album', params: { id: album.id } })
+}
+
+function backToAlbums() {
+  navigate({ name: 'albums' })
+}
+
+async function onAlbumCreated() {
+  await loadAlbums()
+}
+
+async function onAlbumDeleted() {
+  await loadAlbums()
+}
+
+async function onTrashRestored() {
+  await Promise.all([loadInfo(), loadItems(true)])
+}
+
+function setError(message) {
+  error.value = message
+}
+
+function reloadTimelineItems() {
+  nextCursor.value = null
+  loadItems(true)
+}
+
+function openAlbumPicker() {
+  if (!albums.value.length) {
+    showToast(t('batch.noAlbums'), true)
     return
   }
-  openItem(item)
+  showAlbumPicker.value = true
 }
 
-function openContextMenu(event, item) {
-  if (!isSelected(item.id)) {
-    selectedIds.value = [item.id]
-    selectionMode.value = true
-  }
-  lastSelectedId = item.id
-  const width = 216
-  const height = 224
-  contextMenu.value = {
-    item,
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
-  }
-}
-
-function closeContextMenu() {
-  contextMenu.value = null
-}
-
-function onTilePointerDown(event, item) {
-  if (event.pointerType !== 'touch') return
-  tilePressTimer = setTimeout(() => {
-    tilePressTimer = null
-    suppressTileClick = true
-    setTimeout(() => {
-      suppressTileClick = false
-    }, 800)
-    if (!isSelected(item.id)) {
-      selectedIds.value = [item.id]
-      selectionMode.value = true
-    }
-    openContextMenu(event, item)
-  }, 550)
-}
-
-function onTilePointerUp() {
-  if (tilePressTimer) {
-    clearTimeout(tilePressTimer)
-    tilePressTimer = null
-  }
+function closeAlbumPicker() {
+  if (batchBusy.value) return
+  showAlbumPicker.value = false
 }
 
 function downloadItem(item) {
@@ -810,19 +379,6 @@ function downloadSelection() {
 function viewSelection() {
   const first = selectedItems.value[0]
   if (first) openItem(first)
-}
-
-function openAlbumPicker() {
-  if (!albums.value.length) {
-    showToast(t('batch.noAlbums'), true)
-    return
-  }
-  showAlbumPicker.value = true
-}
-
-function closeAlbumPicker() {
-  if (batchBusy.value) return
-  showAlbumPicker.value = false
 }
 
 function contextView() {
@@ -871,7 +427,6 @@ async function deleteSelection() {
   clearSelection()
   await Promise.all([loadInfo(), loadItems(true)])
   if (view.value === 'album') await loadAlbumItems()
-  if (info.value?.trash_enabled) await loadTrash()
   if (failed) {
     showToast(t('batch.deleteFailed', { done, failed, message: lastError }), true)
   } else {
@@ -929,10 +484,6 @@ function replaceItem(updated) {
   if (selected.value?.id === updated.id) selected.value = updated
 }
 
-function onImgError(event) {
-  if (event.target.src !== PLACEHOLDER) event.target.src = PLACEHOLDER
-}
-
 async function startScan() {
   if (scanning.value) return
   scanning.value = true
@@ -946,6 +497,11 @@ async function startScan() {
   }
 }
 
+function onLibraryScanJob(jobId) {
+  scanning.value = true
+  pollScan(jobId)
+}
+
 async function pollScan(jobId) {
   try {
     const job = await api(`${API}/jobs/${jobId}`)
@@ -954,7 +510,9 @@ async function pollScan(jobId) {
       scanning.value = false
       if (job.state === 'completed') {
         await Promise.all([loadInfo(), loadItems(true), loadTags()])
-        if (view.value === 'manage') await loadManagedLibraries()
+        if (view.value === 'manage') {
+          await libraryManagerRef.value?.loadManagedLibraries()
+        }
       } else {
         error.value = job.error || t('errors.scanFailed')
       }
@@ -1110,55 +668,6 @@ async function createAndAttachTag() {
   }
 }
 
-function openAlbumDialog() {
-  newAlbumName.value = ''
-  albumError.value = ''
-  showAlbumDialog.value = true
-}
-
-function closeAlbumDialog() {
-  showAlbumDialog.value = false
-}
-
-async function createAlbum() {
-  const name = newAlbumName.value.trim()
-  if (!name) return
-  albumError.value = ''
-  try {
-    await api(`${API}/albums`, {
-      method: 'POST',
-      body: JSON.stringify({ name }),
-    })
-    newAlbumName.value = ''
-    showAlbumDialog.value = false
-    await loadAlbums()
-    showToast(t('album.created', { name }))
-  } catch (err) {
-    albumError.value = err.message
-  }
-}
-
-async function deleteAlbum(album) {
-  if (!confirm(t('album.deleteConfirm', { name: album.name }))) return
-  if (
-    !confirm(
-      t('album.deleteConfirmAgain', {
-        name: album.name,
-        count: album.item_count,
-      }),
-    )
-  ) {
-    return
-  }
-  try {
-    await api(`${API}/albums/${album.id}`, { method: 'DELETE' })
-    if (activeAlbum.value?.id === album.id) backToAlbums()
-    else await loadAlbums()
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
 async function addSelectedToAlbum() {
   if (!selected.value || !addAlbumId.value) return
   try {
@@ -1204,26 +713,6 @@ async function deleteSelected() {
     items.value = items.value.filter((item) => item.id !== id)
     albumItems.value = albumItems.value.filter((item) => item.id !== id)
     await loadInfo()
-    await loadTrash()
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-async function restoreEntry(entry) {
-  try {
-    await api(`${API}/trash/${entry.id}/restore`, { method: 'POST' })
-    await Promise.all([loadTrash(), loadInfo(), loadItems(true)])
-  } catch (err) {
-    error.value = err.message
-  }
-}
-
-async function purgeEntry(entry) {
-  if (!confirm(t('trash.purgeConfirm', { name: entry.filename }))) return
-  try {
-    await api(`${API}/trash/${entry.id}`, { method: 'DELETE' })
-    await loadTrash()
   } catch (err) {
     error.value = err.message
   }
@@ -1339,18 +828,20 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => route.fullPath,
+  () => {
+    applyRoute()
+  },
+)
+
 onMounted(async () => {
   document.documentElement.lang = locale.value
-  const themeMeta = document.querySelector('meta[name="theme-color"]')
-  if (themeMeta) themeMeta.setAttribute('content', THEME_COLORS[theme.value])
-  layoutQueries = [
-    window.matchMedia('(max-width: 860px)'),
-    window.matchMedia('(orientation: portrait)'),
-  ]
-  for (const query of layoutQueries) query.addEventListener('change', onLayoutChange)
+  applyThemeMeta()
   window.addEventListener('click', closeContextMenu)
   window.addEventListener('scroll', closeContextMenu, true)
-  await Promise.all([loadInfo(), loadTags(), loadAlbums(), loadItems(true)])
+  await Promise.all([loadInfo(), loadTags(), loadAlbums()])
+  await applyRoute()
 
   window.addEventListener('scroll', onWindowScroll, { passive: true })
   window.addEventListener('resize', onWindowScroll)
@@ -1361,8 +852,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (scanTimer) clearTimeout(scanTimer)
   if (transcodeTimer) clearTimeout(transcodeTimer)
-  if (toastTimer) clearTimeout(toastTimer)
-  for (const query of layoutQueries) query.removeEventListener('change', onLayoutChange)
+  clearToast()
   window.removeEventListener('click', closeContextMenu)
   window.removeEventListener('scroll', closeContextMenu, true)
   window.removeEventListener('scroll', onWindowScroll)
@@ -1373,94 +863,30 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">❀</span>
-      <span>photoSelf</span>
-    </div>
-
-    <nav class="tabs">
-      <button :class="{ active: view === 'timeline' }" @click="switchView('timeline')">
-        {{ t('nav.timeline') }}
-      </button>
-      <button :class="{ active: view === 'albums' || view === 'album' }" @click="switchView('albums')">
-        {{ t('nav.albums') }}
-      </button>
-      <button
-        v-if="info && info.write_enabled && info.trash_enabled"
-        :class="{ active: view === 'trash' }"
-        @click="switchView('trash')"
-      >
-        {{ t('nav.trash') }}
-      </button>
-      <button
-        v-if="info && info.manage_enabled"
-        :class="{ active: view === 'manage' }"
-        @click="switchView('manage')"
-      >
-        {{ t('manage.title') }}
-      </button>
-    </nav>
-
-    <form class="search" @submit.prevent="search">
-      <input v-model="query" type="search" :placeholder="t('search.placeholder')" />
-      <button type="submit">{{ t('search.submit') }}</button>
-    </form>
-
-    <div class="actions">
-      <select v-if="view === 'timeline'" v-model="tagFilter" @change="reloadCurrent">
-        <option value="">{{ t('filters.allTags') }}</option>
-        <option v-for="tag in tags" :key="tag.id" :value="tag.name">
-          {{ tag.name }}
-        </option>
-      </select>
-      <select
-        v-if="writableLibraries.length > 1"
-        v-model="uploadLibrary"
-        :title="t('actions.upload')"
-      >
-        <option v-for="library in writableLibraries" :key="library.id" :value="library.id">
-          {{ library.name || library.id }}
-        </option>
-      </select>
-      <button :class="{ active: favoritesOnly }" @click="favoritesOnly = !favoritesOnly; reloadCurrent()">
-        {{ t('filters.favorites') }}
-      </button>
-      <button
-        v-if="view === 'timeline' || view === 'album'"
-        :class="{ active: selectionMode }"
-        @click="toggleSelectionMode"
-      >
-        {{ selectionMode ? t('batch.cancel') : t('batch.select') }}
-      </button>
-      <button
-        v-if="info && info.write_enabled && writableLibraries.length"
-        :disabled="uploading"
-        @click="fileInput?.click()"
-      >
-        {{ uploading ? t('actions.uploading') : t('actions.upload') }}
-      </button>
-      <button :disabled="scanning" @click="startScan">
-        {{ scanning ? t('actions.scanning') : t('actions.scan') }}
-      </button>
-    </div>
-
-    <div class="topbar-tools">
-      <button
-        type="button"
-        class="theme-toggle"
-        :title="theme === 'dark' ? t('theme.toLight') : t('theme.toDark')"
-        :aria-label="theme === 'dark' ? t('theme.toLight') : t('theme.toDark')"
-        @click="toggleTheme"
-      >
-        {{ theme === 'dark' ? '☀️' : '🌙' }}
-      </button>
-      <select v-model="currentLocale" :title="t('language.label')" @change="changeLanguage">
-        <option value="zh-CN">中文</option>
-        <option value="en-US">English</option>
-      </select>
-    </div>
-  </header>
+  <AppHeader
+    v-model:query="query"
+    v-model:tag-filter="tagFilter"
+    v-model:upload-library="uploadLibrary"
+    v-model:current-locale="currentLocale"
+    :view="view"
+    :info="info"
+    :tags="tags"
+    :writable-libraries="writableLibraries"
+    :favorites-only="favoritesOnly"
+    :selection-mode="selectionMode"
+    :uploading="uploading"
+    :scanning="scanning"
+    :theme="theme"
+    @navigate="switchView"
+    @search="search"
+    @tag-change="onTagChange"
+    @toggle-favorites="toggleFavorites"
+    @toggle-selection="toggleSelectionMode"
+    @upload="fileInput?.click()"
+    @scan="startScan"
+    @toggle-theme="toggleTheme"
+    @language-change="changeLanguage"
+  />
 
   <input
     ref="fileInput"
@@ -1484,221 +910,33 @@ onUnmounted(() => {
 
   <main>
     <!-- Albums -->
-    <section v-if="view === 'albums'" class="albums-view">
-      <div class="view-head">
-        <div>
-          <h2>{{ t('nav.albums') }}</h2>
-          <p>{{ t('album.hint') }}</p>
-        </div>
-        <button type="button" class="primary" @click="openAlbumDialog">
-          ＋ {{ t('album.create') }}
-        </button>
-      </div>
-
-      <div v-if="!albums.length" class="empty">
-        <h2>{{ t('empty.noAlbumsTitle') }}</h2>
-        <p>{{ t('empty.noAlbumsHint') }}</p>
-      </div>
-      <div class="album-grid">
-        <article v-for="album in albums" :key="album.id" class="album-card" @click="openAlbum(album)">
-          <img v-if="album.cover_url" :src="album.cover_url" :alt="album.name" @error="onImgError" />
-          <div v-else class="album-cover-empty">▣</div>
-          <div class="album-info">
-            <strong>{{ album.name }}</strong>
-            <small>{{ t('album.items', album.item_count) }}</small>
-          </div>
-          <button class="album-delete" :title="t('album.deleteTitle')" @click.stop="deleteAlbum(album)">×</button>
-        </article>
-      </div>
-
-      <div v-if="showAlbumDialog" class="manager-modal" @click.self="closeAlbumDialog">
-        <div class="manager-dialog album-dialog">
-          <h3>{{ t('album.createTitle') }}</h3>
-          <label class="field">
-            <span>{{ t('album.nameLabel') }}</span>
-            <input
-              v-model="newAlbumName"
-              :placeholder="t('album.createPlaceholder')"
-              @keyup.enter="createAlbum"
-            />
-          </label>
-          <p v-if="albumError" class="error">{{ albumError }}</p>
-          <div class="dialog-actions">
-            <button type="button" @click="closeAlbumDialog">
-              {{ t('actions.close') }}
-            </button>
-            <button
-              type="button"
-              class="primary"
-              :disabled="!newAlbumName.trim()"
-              @click="createAlbum"
-            >
-              {{ t('album.create') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
+    <AlbumsView
+      v-if="view === 'albums'"
+      :albums="albums"
+      @open="openAlbum"
+      @created="onAlbumCreated"
+      @deleted="onAlbumDeleted"
+      @error="setError"
+    />
 
     <!-- Library management -->
-    <section v-else-if="view === 'manage'" class="manage-view">
-      <div class="manage-head">
-        <div>
-          <h2>{{ t('manage.title') }}</h2>
-          <p>{{ t('manage.hint') }}</p>
-        </div>
-        <div class="row manage-actions">
-          <button type="button" @click="importLibraries">{{ t('manage.importConfig') }}</button>
-          <button type="button" class="primary" @click="openAddLibrary">
-            {{ t('manage.add') }}
-          </button>
-        </div>
-      </div>
-
-      <p v-if="libraryMessage" class="muted">{{ libraryMessage }}</p>
-      <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="libraryLoading && !libraryList.length" class="muted">
-        {{ t('actions.loading') }}
-      </p>
-
-      <div v-if="!libraryLoading && !libraryList.length" class="empty">
-        <h2>{{ t('manage.empty') }}</h2>
-        <p>{{ t('manage.emptyHint') }}</p>
-      </div>
-
-      <div class="library-list">
-        <article
-          v-for="library in libraryList"
-          :key="library.id"
-          class="library-card"
-          :class="{ off: !library.enabled }"
-        >
-          <div class="library-main">
-            <div class="library-title">
-              <strong>{{ library.name }}</strong>
-              <span v-if="library.read_only" class="badge">{{ t('manage.readOnly') }}</span>
-              <span v-if="!library.enabled" class="badge warn">{{ t('manage.disabled') }}</span>
-              <span class="badge source">{{ t('manage.source.' + library.source) }}</span>
-            </div>
-            <code class="library-path">{{ library.path }}</code>
-            <small>{{ t('manage.items', library.item_count) }}</small>
-          </div>
-          <div class="row library-actions">
-            <button
-              type="button"
-              :disabled="scanning || !library.enabled"
-              @click="scanLibraryEntry(library)"
-            >
-              {{ t('manage.scan') }}
-            </button>
-            <button type="button" @click="toggleLibrary(library)">
-              {{ library.enabled ? t('manage.disable') : t('manage.enable') }}
-            </button>
-            <button type="button" class="danger" @click="removeLibrary(library)">
-              {{ t('manage.remove') }}
-            </button>
-          </div>
-        </article>
-      </div>
-
-      <div v-if="showAddLibrary" class="manager-modal" @click.self="closeAddLibrary">
-        <div class="manager-dialog">
-          <h3>{{ t('manage.add') }}</h3>
-
-          <label class="field">
-            <span>{{ t('manage.path') }}</span>
-            <div class="row">
-              <input
-                v-model="newLibrary.path"
-                :placeholder="t('manage.pathPlaceholder')"
-                spellcheck="false"
-              />
-              <button type="button" :disabled="browserLoading" @click="browseTo()">
-                {{ t('manage.browse') }}
-              </button>
-            </div>
-            <small>{{ t('manage.pathHint') }}</small>
-          </label>
-
-          <div v-if="browser" class="dir-browser">
-            <div class="dir-head">
-              <button
-                v-if="browser.parent"
-                type="button"
-                @click="browseTo(browser.parent)"
-              >
-                ← {{ t('manage.up') }}
-              </button>
-              <code>{{ browser.path || t('manage.roots') }}</code>
-              <button
-                v-if="browser.path"
-                type="button"
-                class="primary"
-                @click="chooseBrowserDir"
-              >
-                {{ t('manage.choose') }}
-              </button>
-            </div>
-            <p v-if="browserLoading" class="muted">{{ t('actions.loading') }}</p>
-            <ul v-else>
-              <li v-for="entry in browser.entries" :key="entry.path">
-                <button type="button" @click="browseTo(entry.path)">
-                  📁 {{ entry.name }}
-                </button>
-              </li>
-            </ul>
-            <p v-if="!browserLoading && !browser.entries?.length" class="muted">
-              {{ t('manage.noSubdirs') }}
-            </p>
-          </div>
-
-          <label class="field">
-            <span>{{ t('manage.name') }}</span>
-            <input
-              v-model="newLibrary.name"
-              :placeholder="t('manage.namePlaceholder')"
-            />
-          </label>
-
-          <label class="check">
-            <input v-model="newLibrary.read_only" type="checkbox" />
-            {{ t('manage.readOnlyLabel') }}
-          </label>
-
-          <p v-if="libraryError" class="error">{{ libraryError }}</p>
-
-          <div class="row dialog-actions">
-            <button type="button" @click="closeAddLibrary">
-              {{ t('actions.close') }}
-            </button>
-            <button
-              type="button"
-              class="primary"
-              :disabled="addingLibrary || !newLibrary.path.trim()"
-              @click="addLibrary"
-            >
-              {{ addingLibrary ? t('actions.loading') : t('manage.addConfirm') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
+    <LibraryManager
+      v-else-if="view === 'manage'"
+      ref="libraryManagerRef"
+      :scanning="scanning"
+      :error="error"
+      @scan-job="onLibraryScanJob"
+      @reload-info="loadInfo"
+      @reload-items="reloadTimelineItems"
+      @error="setError" @clear-error="setError('')"
+    />
 
     <!-- Trash -->
-    <section v-else-if="view === 'trash'" class="trash-view">
-      <h2>{{ t('trash.title') }}</h2>
-      <p v-if="!trashEntries.length" class="empty">{{ t('empty.trash') }}</p>
-      <div v-for="entry in trashEntries" :key="entry.id" class="trash-row">
-        <div>
-          <strong>{{ entry.filename }}</strong>
-          <small>{{ t('trash.deletedAt', { date: formatDate(entry.deleted_at), library: entry.library_id }) }}</small>
-        </div>
-        <div class="row">
-          <button @click="restoreEntry(entry)">{{ t('trash.restore') }}</button>
-          <button class="danger" @click="purgeEntry(entry)">{{ t('trash.purge') }}</button>
-        </div>
-      </div>
-    </section>
+    <TrashView
+      v-else-if="view === 'trash'"
+      @restored="onTrashRestored"
+      @error="setError"
+    />
 
     <!-- Timeline / album -->
     <template v-else>
@@ -1717,7 +955,7 @@ onUnmounted(() => {
       </div>
 
       <section v-for="group in groups" :key="group.date" class="day">
-        <h2>{{ dateLabel(group.date) }} <small>{{ group.items.length }}</small></h2>
+        <h2>{{ dateLabel(group.date, locale, t) }} <small>{{ group.items.length }}</small></h2>
         <div class="grid">
           <button
             v-for="item in group.items"
@@ -1854,7 +1092,7 @@ onUnmounted(() => {
       <div class="meta-body">
         <h3>{{ selected.filename }}</h3>
         <dl>
-          <div><dt>{{ t('lightbox.date') }}</dt><dd>{{ formatDate(selected.taken_at) }}</dd></div>
+          <div><dt>{{ t('lightbox.date') }}</dt><dd>{{ formatDate(selected.taken_at, t) }}</dd></div>
           <div v-if="selected.width">
             <dt>{{ t('lightbox.dimensions') }}</dt><dd>{{ selected.width }} × {{ selected.height }}</dd>
           </div>
@@ -1923,80 +1161,38 @@ onUnmounted(() => {
     </aside>
   </div>
 
-  <div v-if="selectionActive && !selected" class="selection-bar">
-    <span class="selection-count">
-      {{ t('batch.selected', { count: selectedItems.length }) }}
-    </span>
-    <button type="button" :disabled="!selectedItems.length" @click="viewSelection">
-      {{ t('batch.view') }}
-    </button>
-    <button type="button" :disabled="!selectedItems.length" @click="downloadSelection">
-      {{ t('batch.download') }}
-    </button>
-    <button type="button" :disabled="!selectedItems.length" @click="openAlbumPicker">
-      {{ t('batch.addToAlbum') }}
-    </button>
-    <button
-      v-if="info && info.write_enabled && info.trash_enabled"
-      type="button"
-      class="danger"
-      :disabled="!canDeleteSelection || batchBusy"
-      @click="deleteSelection"
-    >
-      {{ t('batch.delete') }}
-    </button>
-    <button type="button" @click="clearSelection">{{ t('batch.clear') }}</button>
-  </div>
+  <SelectionBar
+    v-if="selectionActive && !selected"
+    :count="selectedItems.length"
+    :can-delete="canDeleteSelection"
+    :show-delete="Boolean(info && info.write_enabled && info.trash_enabled)"
+    :busy="batchBusy"
+    @view="viewSelection"
+    @download="downloadSelection"
+    @add-album="openAlbumPicker"
+    @delete="deleteSelection"
+    @clear="clearSelection"
+  />
 
-  <div
+  <ContextMenu
     v-if="contextMenu"
-    class="ctx-menu"
-    :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-    @click.stop
-    @contextmenu.prevent
-  >
-    <p class="ctx-title">{{ contextMenu.item.filename }}</p>
-    <button type="button" @click="contextView">👁 {{ t('batch.view') }}</button>
-    <button type="button" @click="contextDownload">⬇ {{ t('batch.download') }}</button>
-    <button type="button" @click="contextAlbum">＋ {{ t('batch.addToAlbum') }}</button>
-    <button
-      type="button"
-      class="danger"
-      :disabled="!canDeleteSelection"
-      :title="canDeleteSelection ? '' : t('batch.readOnly')"
-      @click="contextDelete"
-    >
-      🗑 {{ t('batch.delete') }}
-    </button>
-    <p v-if="selectedItems.length > 1" class="ctx-hint">
-      {{ t('batch.selected', { count: selectedItems.length }) }}
-    </p>
-  </div>
+    :menu="contextMenu"
+    :can-delete="canDeleteSelection"
+    :count="selectedItems.length"
+    @view="contextView"
+    @download="contextDownload"
+    @album="contextAlbum"
+    @delete="contextDelete"
+  />
 
-  <div v-if="showAlbumPicker" class="manager-modal" @click.self="closeAlbumPicker">
-    <div class="manager-dialog album-picker">
-      <h3>{{ t('batch.addToAlbum') }}</h3>
-      <p class="muted">
-        {{ t('batch.selected', { count: selectedItems.length }) }}
-      </p>
-      <div v-if="albums.length" class="album-picker-list">
-        <button
-          v-for="album in albums"
-          :key="album.id"
-          type="button"
-          :disabled="batchBusy"
-          @click="addSelectionToAlbum(album)"
-        >
-          <strong>{{ album.name }}</strong>
-          <small>{{ t('manage.items', album.item_count) }}</small>
-        </button>
-      </div>
-      <p v-else class="muted">{{ t('batch.noAlbums') }}</p>
-      <div class="dialog-actions">
-        <button type="button" @click="closeAlbumPicker">{{ t('actions.close') }}</button>
-      </div>
-    </div>
-  </div>
+  <AlbumPicker
+    v-if="showAlbumPicker"
+    :albums="albums"
+    :count="selectedItems.length"
+    :busy="batchBusy"
+    @pick="addSelectionToAlbum"
+    @close="closeAlbumPicker"
+  />
 
   <div v-if="toast" class="toast" :class="{ error: toast.error }" role="status">
     {{ toast.text }}

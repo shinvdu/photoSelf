@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.4 — 2026-11-28
+
+- Split the monolithic UI: `App.vue` 2,004 → ~1,199 lines, with extracted
+  `components/` (header, albums, trash, library manager, selection bar, context
+  menu, dialogs) and `composables/` (`useTheme`, `useLightbox`, `useSelection`).
+- Added Vue Router (hash history) with deep links for timeline filters, albums,
+  album detail, trash and libraries; refresh and browser back/forward work.
+- Added 12 Playwright interaction tests with a mocked API (`ui/tests/e2e`).
+  Run with `cd ui && npm run test:e2e`.
+- Added shared `api.js`, `toast.js`, `format.js`, `placeholder.js` modules.
+- Updated the technical design and added a frontend stack assessment doc.
+
 ## 0.7.3 — 2026-11-27
 
 - Light-mode video play badge restyled: white translucent disc with a pink

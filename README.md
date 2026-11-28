@@ -69,6 +69,8 @@ Most self-hosted galleries assume a powerful server and want to import your libr
   view, download, add to album, delete
 - Optional UI library manager: add/disable/remove directories, trigger per-library
   scans, and browse the server filesystem inside a configured allow-list
+- Hash-based deep links for timeline filters, albums, trash and libraries;
+  Playwright interaction tests with a mocked API
 - `none` / `basic` / `proxy` authentication
 - Standalone mode (Rust serves API, media and UI) or reverse-proxy mode
 - Embedded-UI release build (optional feature)
