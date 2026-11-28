@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.6 — 2026-11-28
+
+- Portrait/compact lightbox prev/next arrows are much more transparent by
+  default (opacity 0.45, 28% panel background); hover/focus restores full
+  visibility. They remain tappable on touch devices.
+
 ## 0.7.5 — 2026-11-28
 
 - Fix: previous/next arrows in the lightbox are visible again in portrait / compact

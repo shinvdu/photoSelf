@@ -504,11 +504,22 @@ main {
     place-items: center;
     width: 38px;
     height: 56px;
+    border-color: color-mix(in srgb, var(--border) 55%, transparent);
     border-radius: 12px;
-    background: color-mix(in srgb, var(--panel) 84%, transparent);
+    background: color-mix(in srgb, var(--panel) 42%, transparent);
+    color: color-mix(in srgb, var(--text) 70%, transparent);
     font-size: 24px;
+    opacity: 0.55;
     transform: translateY(-50%);
     backdrop-filter: blur(6px);
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  }
+
+  .lightbox .nav:hover,
+  .lightbox .nav:focus-visible {
+    background: color-mix(in srgb, var(--panel) 78%, transparent);
+    color: var(--text);
+    opacity: 1;
   }
 
   .lightbox .nav.prev {
@@ -1890,4 +1901,20 @@ body {
   background: rgba(10, 6, 12, 0.62);
   color: #fff;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* Portrait/compact arrows stay intentionally subtle; hover/focus reveals them. */
+@media (max-width: 860px), (orientation: portrait) {
+  .lightbox .nav {
+    background: color-mix(in srgb, var(--panel) 28%, transparent);
+    color: color-mix(in srgb, var(--text) 62%, transparent);
+    opacity: 0.45;
+  }
+
+  .lightbox .nav:hover,
+  .lightbox .nav:focus-visible {
+    background: color-mix(in srgb, var(--panel) 76%, transparent);
+    color: var(--text);
+    opacity: 1;
+  }
 }
