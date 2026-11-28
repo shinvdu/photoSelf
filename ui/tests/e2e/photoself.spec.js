@@ -156,6 +156,12 @@ test('theme toggle and portrait lightbox drawer do not regress', async ({ page }
   await expect(page.locator('.lightbox .meta')).not.toHaveClass(/open/)
   // In portrait the drawer handle replaces the landscape-only ⓘ toggle.
   await expect(page.locator('.info-toggle')).toBeHidden()
+  // Prev/next navigation must remain visible in portrait as well.
+  await expect(page.locator('.lightbox .nav.prev')).toBeVisible()
+  await expect(page.locator('.lightbox .nav.next')).toBeVisible()
+  const before = await page.locator('.meta-handle .meta-title').innerText()
+  await page.locator('.lightbox .nav.next').click()
+  await expect(page.locator('.meta-handle .meta-title')).not.toHaveText(before)
 })
 
 test('album deletion requires two confirmations and removes the card', async ({ page }) => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5 — 2026-11-28
+
+- Fix: previous/next arrows in the lightbox are visible again in portrait / compact
+  layouts; they were hidden by the mobile CSS rule. Swipe navigation still works.
+- Playwright portrait test now asserts both arrows are visible and that the next
+  arrow changes the photo.
+
 ## 0.7.4 — 2026-11-28
 
 - Split the monolithic UI: `App.vue` 2,004 → ~1,199 lines, with extracted
